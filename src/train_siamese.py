@@ -51,7 +51,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--epochs",
-    default=20,
+    default=5,
     type=int,
     help="Number of epochs (passes through the entire dataset) to train for",
 )
@@ -103,7 +103,7 @@ else:
 def main(args):
     transform = transforms.Compose([transforms.Resize((224,224)),transforms.ToTensor()])
     args.dataset_root.mkdir(parents=True, exist_ok=True)
-    epoch_size = 5000 #change to 5000
+    epoch_size = 100 #change to 5000
     recepie_ids_list = ["P01_R01_instance_0","P01_R01_instance_1","P01_R01_instance_2","P01_R03","P01_R04","P01_R05","P01_R07","P01_R09","P02_R01","P02_R02","P02_R03_instance_0","P02_R03_instance_1","P02_R03_instance_2","P02_R03_instance_3","P02_R05","P02_R07","P02_R08","P02_R10","P02_R11","P03_R01","P03_R02","P03_R03_instance_0","P03_R03_instance_2","P03_R03_instance_3","P03_R04","P03_R05","P03_R06","P03_R07","P03_R08","P03_R09","P03_R10","P04_R01","P04_R02","P04_R03","P04_R04","P04_R05","P04_R06","P05_R01","P05_R02_instance_0","P05_R02_instance_2","P05_R03","P05_R04","P05_R05","P05_R06","P07_R01","P07_R02","P07_R03","P07_R04","P07_R05","P07_R06","P07_R07","P08_R01","P08_R02","P08_R04","P08_R05","P08_R06","P08_R07","P08_R08","P08_R09","P09_R01","P09_R02","P09_R03_instance_0","P09_R03_instance_1","P09_R04","P09_R05","P09_R06"]
 
     
@@ -157,6 +157,9 @@ def main(args):
         print_frequency=args.print_frequency,
         log_frequency=args.log_frequency,
     )
+    test_loss, test_accuracy = trainer.test(test_loader)
+    print(f"Final test accuracy: {test_accuracy * 100:.2f}%")
+    print(f"Final test loss: {test_loss:.5f}")
 
     summary_writer.close()
 
@@ -310,7 +313,7 @@ class Trainer:
                 if ((self.step + 1) % log_frequency) == 0:
                     val_loss, val_accuracy = self.validate()
                     self.summary_writer.add_scalars("accuracy", {"train":accuracy, "val": val_accuracy}, self.step)
-                    self.summary_writer.add_scalars("loss", {"train":loss, "val": loss}, self.step)
+                    self.summary_writer.add_scalars("loss", {"train":loss.item(), "val": val_loss}, self.step)
                     self.model.train()
 
                 if ((self.step + 1) % print_frequency) == 0:
@@ -329,6 +332,9 @@ class Trainer:
                 # self.validate() will put the model in validation mode,
                 # so we have to switch back to train mode afterwards
                 self.model.train()
+        best_model_path = Path(self.summary_writer.log_dir) / "best_model.pth"
+        if best_model_path.exists():
+            self.model.load_state_dict(torch.load(best_model_path, weights_only=True))
 
     def print_metrics(self, epoch, accuracy, loss, data_load_time, step_time):
         epoch_step = self.step % len(self.train_loader)
@@ -384,6 +390,28 @@ class Trainer:
             np.array(results["labels"]), np.array(results["preds"])
         )
         average_loss = total_loss / len(self.val_loader)
+        return average_loss, accuracy
+    def test(self, test_loader):
+        results = {"preds": [], "labels": []}
+        total_loss = 0
+        self.model.eval()
+
+        with torch.no_grad():
+            for img_a, img_b, labels in test_loader:
+                img_a = img_a.to(self.device)
+                img_b = img_b.to(self.device)
+                labels = labels.to(self.device)
+                logits = self.model(img_a, img_b)
+                loss = self.criterion(logits, labels)
+                total_loss += loss.item()
+                preds = logits.argmax(dim=-1).cpu().numpy()
+                results["preds"].extend(list(preds))
+                results["labels"].extend(list(labels.cpu().numpy()))
+
+        accuracy = compute_accuracy(
+            np.array(results["labels"]), np.array(results["preds"])
+        )
+        average_loss = total_loss / len(test_loader)
         return average_loss, accuracy
 
 
