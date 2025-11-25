@@ -39,7 +39,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--learning-rate", 
-    default=1e-4, 
+    default=1e-3, 
     type=float, 
     help="Base Adam Learning rate"
 )
@@ -57,15 +57,15 @@ parser.add_argument(
 )
 parser.add_argument(
     "--epoch-size",
-    default=5000,
+    default=500,
     type=int,
     help="number of pairs generated per epoch in training mode",
 )
 parser.add_argument(
     "--val-frequency",
-    default=2,
+    default=1,
     type=int,
-    help="How frequently to test the model on the validation set in number of epochs",
+    help="How frequently to update the best model save",
 )
 parser.add_argument(
     "--log-frequency",
@@ -86,6 +86,7 @@ parser.add_argument(
     type=int,
     help="Number of worker processes used to load data.",
 )
+
 
 class ImageShape(NamedTuple):
     height: int
@@ -147,7 +148,7 @@ def main(args):
             flush_secs=5
     )
     trainer = Trainer(
-        model, train_loader, test_loader, criterion, optimizer, summary_writer, DEVICE
+        model, train_loader, val_loader, criterion, optimizer, summary_writer, DEVICE
     )
 
     trainer.train(
@@ -269,6 +270,7 @@ class Trainer:
         self.optimizer = optimizer
         self.summary_writer = summary_writer
         self.step = 0
+        self.best_val_accuracy = 0.0
 
     def train(
         self,
@@ -284,13 +286,12 @@ class Trainer:
             print("Starting training loop...")
             data_load_start_time = time.time()
             for img_a, img_b, labels in self.train_loader:
-                print(f"Loaded first batch, shape: {img_a.shape}, {img_b.shape}")
+                print(f"Batch loaded, shape: {img_a.shape}, {img_b.shape}")
                 img_a = img_a.to(self.device)
                 img_b = img_b.to(self.device)
                 labels = labels.to(self.device)
                 data_load_end_time = time.time()
                 logits =self.model(img_a, img_b)
-                print("Starting forward pass...")
                 loss = self.criterion(logits, labels)
                 loss.backward()
                 self.optimizer.step()
@@ -307,7 +308,11 @@ class Trainer:
                 data_load_time = data_load_end_time - data_load_start_time
                 step_time = time.time() - data_load_end_time
                 if ((self.step + 1) % log_frequency) == 0:
-                    self.log_metrics(epoch, accuracy, loss, data_load_time, step_time)
+                    val_loss, val_accuracy = self.validate()
+                    self.summary_writer.add_scalars("accuracy", {"train":accuracy, "val": val_accuracy}, self.step)
+                    self.summary_writer.add_scalars("loss", {"train":loss, "val": loss}, self.step)
+                    self.model.train()
+
                 if ((self.step + 1) % print_frequency) == 0:
                     self.print_metrics(epoch, accuracy, loss, data_load_time, step_time)
 
@@ -316,7 +321,11 @@ class Trainer:
 
             self.summary_writer.add_scalar("epoch", epoch, self.step)
             if ((epoch + 1) % val_frequency) == 0:
-                self.validate()
+                val_loss, val_accuracy = self.validate()
+                if val_accuracy > self.best_val_accuracy:
+                    torch.save(self.model.state_dict(), Path(self.summary_writer.log_dir) / "best_model.pth")
+                    self.best_val_accuracy = val_accuracy
+               
                 # self.validate() will put the model in validation mode,
                 # so we have to switch back to train mode afterwards
                 self.model.train()
@@ -331,6 +340,7 @@ class Trainer:
                 f"data load time: "
                 f"{data_load_time:.5f}, "
                 f"step time: {step_time:.5f}"
+                
         )
 
     def log_metrics(self, epoch, accuracy, loss, data_load_time, step_time):
@@ -374,18 +384,7 @@ class Trainer:
             np.array(results["labels"]), np.array(results["preds"])
         )
         average_loss = total_loss / len(self.val_loader)
-
-        self.summary_writer.add_scalars(
-                "accuracy",
-                {"test": accuracy},
-                self.step
-        )
-        self.summary_writer.add_scalars(
-                "loss",
-                {"test": average_loss},
-                self.step
-        )
-        print(f"validation loss: {average_loss:.5f}, accuracy: {accuracy * 100:2.2f}")
+        return average_loss, accuracy
 
 
 def compute_accuracy(
