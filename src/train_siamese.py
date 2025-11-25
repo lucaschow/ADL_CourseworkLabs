@@ -39,13 +39,13 @@ parser.add_argument(
 )
 parser.add_argument(
     "--learning-rate", 
-    default=1e-3, 
+    default=1e-4, 
     type=float, 
     help="Base Adam Learning rate"
 )
 parser.add_argument(
     "--batch-size",
-    default=8,
+    default=32,
     type=int,
     help="Number of pairs within each mini-batch",
 )
@@ -86,7 +86,6 @@ parser.add_argument(
     type=int,
     help="Number of worker processes used to load data.",
 )
-
 
 class ImageShape(NamedTuple):
     height: int
