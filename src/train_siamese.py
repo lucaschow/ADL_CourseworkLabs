@@ -39,7 +39,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--learning-rate", 
-    default=1e-3, 
+    default=1e-4, 
     type=float, 
     help="Base Adam Learning rate"
 )
@@ -328,6 +328,7 @@ class Trainer:
                 if val_accuracy > self.best_val_accuracy:
                     torch.save(self.model.state_dict(), Path(self.summary_writer.log_dir) / "best_model.pth")
                     self.best_val_accuracy = val_accuracy
+                    print(f"best model saved with validation accuracy", val_accuracy)
                
                 # self.validate() will put the model in validation mode,
                 # so we have to switch back to train mode afterwards
