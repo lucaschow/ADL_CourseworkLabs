@@ -57,7 +57,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--epoch-size",
-    default=500,
+    default=5000,
     type=int,
     help="number of pairs generated per epoch in training mode",
 )
@@ -86,7 +86,14 @@ parser.add_argument(
     type=int,
     help="Number of worker processes used to load data.",
 )
+parser.add_argument(
+    "--weight-decay", type=float, default=0.0,
+    help="L2 weight decay "
+)
 
+parser.add_argument("--beta1", type=float, default=0.9,help="Adam Beta1.")
+
+parser.add_argument("--beta2", type=float, default=0.999,help="Adam Beta2.")
 
 class ImageShape(NamedTuple):
     height: int
@@ -101,16 +108,33 @@ else:
 
 
 def main(args):
-    transform = transforms.Compose([transforms.Resize((224,224)),transforms.ToTensor()])
+    train_tf = transforms.Compose([
+        transforms.RandomResizedCrop(224, scale=(0.7, 1.0), ratio=(0.9, 1.1)),
+        transforms.RandomHorizontalFlip(0.5),
+        transforms.RandomRotation(10),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.15, hue=0.05),
+        transforms.RandomGrayscale(0.1),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        transforms.RandomErasing(p=0.25, scale=(0.02, 0.15), ratio=(0.3, 3.3), inplace=True),
+
+    ])
+    eval_tf = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+
+    ])
     args.dataset_root.mkdir(parents=True, exist_ok=True)
-    epoch_size = 5000 #change to 5000
+    epoch_size = 5000
     recepie_ids_list = ["P01_R01_instance_0","P01_R01_instance_1","P01_R01_instance_2","P01_R03","P01_R04","P01_R05","P01_R07","P01_R09","P02_R01","P02_R02","P02_R03_instance_0","P02_R03_instance_1","P02_R03_instance_2","P02_R03_instance_3","P02_R05","P02_R07","P02_R08","P02_R10","P02_R11","P03_R01","P03_R02","P03_R03_instance_0","P03_R03_instance_2","P03_R03_instance_3","P03_R04","P03_R05","P03_R06","P03_R07","P03_R08","P03_R09","P03_R10","P04_R01","P04_R02","P04_R03","P04_R04","P04_R05","P04_R06","P05_R01","P05_R02_instance_0","P05_R02_instance_2","P05_R03","P05_R04","P05_R05","P05_R06","P07_R01","P07_R02","P07_R03","P07_R04","P07_R05","P07_R06","P07_R07","P08_R01","P08_R02","P08_R04","P08_R05","P08_R06","P08_R07","P08_R08","P08_R09","P09_R01","P09_R02","P09_R03_instance_0","P09_R03_instance_1","P09_R04","P09_R05","P09_R06"]
 
     
-    train_dataset = ProgressionDataset(root_dir='dataset/train', transform=transform, mode='train', recipe_ids_list=recepie_ids_list, epoch_size=epoch_size)
-    #you didnt load in the data correctly you melon - we only have train
-    test_dataset = ProgressionDataset(root_dir='dataset/test', transform=transform, mode='test', label_file='dataset/test_labels.txt')
-    val_dataset = ProgressionDataset(root_dir='dataset/val', transform=transform, mode='val', label_file='dataset/val_labels.txt')
+    train_dataset = ProgressionDataset(root_dir='dataset/train', transform=train_tf, mode='train', recipe_ids_list=recepie_ids_list, epoch_size=epoch_size)
+    
+    test_dataset = ProgressionDataset(root_dir='dataset/test', transform=eval_tf, mode='test', label_file='dataset/test_labels.txt')
+    val_dataset = ProgressionDataset(root_dir='dataset/val', transform=eval_tf, mode='val', label_file='dataset/val_labels.txt')
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         shuffle=True,
@@ -135,11 +159,11 @@ def main(args):
 
     model = Siamese(in_channels=3) #was CNN
 
-    ## TASK 8: Redefine the criterion to be softmax cross entropy
+    
     criterion = nn.CrossEntropyLoss()
 
-    ## TASK 11: Define the optimizer
-    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+    
+    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, betas=(args.beta1, args.beta2), weight_decay=args.weight_decay)
 
     log_dir = get_summary_writer_log_dir(args)
     print(f"Writing logs to {log_dir}")
@@ -250,6 +274,8 @@ class Siamese(nn.Module):
         x = self.ReLU(x)
         x = self.dropout(x)
         x = self.fc2(x)
+        
+
         return x
 
 
@@ -300,9 +326,7 @@ class Trainer:
                 self.optimizer.step()
                 self.optimizer.zero_grad()
 
-                ## TASK 10: Compute the backward pass
-
-                ## TASK 12: Step the optimizer and then zero out the gradient buffers.
+               
 
                 with torch.no_grad():
                     preds = logits.argmax(-1)
@@ -321,8 +345,11 @@ class Trainer:
 
                 self.step += 1
                 data_load_start_time = time.time()
+             
 
             self.summary_writer.add_scalar("epoch", epoch, self.step)
+            
+
             if ((epoch + 1) % val_frequency) == 0:
                 val_loss, val_accuracy = self.validate()
                 if val_accuracy > self.best_val_accuracy:
@@ -386,6 +413,12 @@ class Trainer:
                 preds = logits.argmax(dim=-1).cpu().numpy()
                 results["preds"].extend(list(preds))
                 results["labels"].extend(list(labels.cpu().numpy()))
+        num_classses = 3
+        conf_matrix = np.zeros((num_classses, num_classses), dtype=int)
+        for t, p in zip(results["labels"], results["preds"]):
+            conf_matrix[t, p] += 1
+        print("Confusion Matrix:")
+        print(conf_matrix)
 
         accuracy = compute_accuracy(
             np.array(results["labels"]), np.array(results["preds"])
