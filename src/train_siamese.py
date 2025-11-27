@@ -86,6 +86,29 @@ parser.add_argument(
     type=int,
     help="Number of worker processes used to load data.",
 )
+parser.add_argument(
+    "--weight-decay", type=float, default=0.0,
+    help="L2 weight decay "
+)
+parser.add_argument("--beta1", type=float, default=0.9,help="Adam Beta1.")
+parser.add_argument("--beta2", type=float, default=0.999,help="Adam Beta2.")
+
+# Optimizer selection
+parser.add_argument("--optimizer", type=str, default="adam", choices=["adam", "adamw"],
+    help="Optimizer type: adam or adamw")
+
+# Scheduler selection
+parser.add_argument("--scheduler", type=str, default="none", 
+    choices=["none", "cosine", "reduce_on_plateau"],
+    help="Learning rate scheduler type")
+
+# Cosine annealing parameters
+parser.add_argument("--T-max", type=int, default=None,
+    help="T_max for CosineAnnealingLR (default: epochs, only used if scheduler=cosine)")
+
+# Dropout
+parser.add_argument("--dropout", type=float, default=0.5,
+    help="Dropout probability (0.0 to 1.0)")
 
 
 class ImageShape(NamedTuple):
@@ -133,13 +156,27 @@ def main(args):
         pin_memory=True,
     )
 
-    model = Siamese(in_channels=3) #was CNN
+    model = Siamese(in_channels=3, dropout=args.dropout) #was CNN
 
     ## TASK 8: Redefine the criterion to be softmax cross entropy
     criterion = nn.CrossEntropyLoss()
 
-    ## TASK 11: Define the optimizer
-    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+    # Create optimizer
+    if args.optimizer.lower() == "adamw":
+        optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, 
+                               betas=(args.beta1, args.beta2), weight_decay=args.weight_decay)
+    else:  # adam
+        optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, 
+                              betas=(args.beta1, args.beta2), weight_decay=args.weight_decay)
+
+    # Create scheduler
+    scheduler = None
+    if args.scheduler == "cosine":
+        T_max = args.T_max if args.T_max else args.epochs
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max, eta_min=0.0)
+    elif args.scheduler == "reduce_on_plateau":
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='max', factor=0.5, patience=5, min_lr=1e-6, verbose=True)
 
     log_dir = get_summary_writer_log_dir(args)
     print(f"Writing logs to {log_dir}")
@@ -148,7 +185,7 @@ def main(args):
             flush_secs=5
     )
     trainer = Trainer(
-        model, train_loader, val_loader, criterion, optimizer, summary_writer, DEVICE
+        model, train_loader, val_loader, test_loader, criterion, optimizer, scheduler, summary_writer, DEVICE
     )
 
     trainer.train(
@@ -232,13 +269,13 @@ class Branch(nn.Module):
                 nn.init.kaiming_normal_(layer.weight)
 
 class Siamese(nn.Module):
-    def __init__(self, in_channels=3):
+    def __init__(self, in_channels=3, dropout=0.5):
         super().__init__()
         self.branch = Branch(channels=in_channels) #initialise once so we get shared weights
         self.fc1 =nn.Linear(1024,512)
         self.fc2 = nn.Linear(512,3)
         self.ReLU = nn.ReLU(inplace=True)
-        self.dropout = nn.Dropout(p=0.5)
+        self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, anchor, comparator):
         b1 = self.branch(anchor)
@@ -260,8 +297,10 @@ class Trainer:
         model: nn.Module,
         train_loader: DataLoader,
         val_loader: DataLoader,
+        test_loader: DataLoader,
         criterion: nn.Module,
         optimizer: Optimizer,
+        scheduler,
         summary_writer: SummaryWriter,
         device: torch.device,
     ):
@@ -269,8 +308,10 @@ class Trainer:
         self.device = device
         self.train_loader = train_loader
         self.val_loader = val_loader
+        self.test_loader = test_loader
         self.criterion = criterion
         self.optimizer = optimizer
+        self.scheduler = scheduler
         self.summary_writer = summary_writer
         self.step = 0
         self.best_val_accuracy = 0.0
@@ -330,8 +371,29 @@ class Trainer:
                     self.best_val_accuracy = val_accuracy
                     print(f"best model saved with validation accuracy", val_accuracy)
                
+                # Step scheduler based on validation metric (for ReduceLROnPlateau)
+                if self.scheduler is not None and isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                    self.scheduler.step(val_accuracy)
+                
                 # self.validate() will put the model in validation mode,
                 # so we have to switch back to train mode afterwards
+                self.model.train()
+            
+            # Step scheduler after each epoch (for cosine annealing)
+            if self.scheduler is not None and not isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                self.scheduler.step()
+            
+            if ((epoch + 1) % 5) == 0:
+                best_model_path = Path(self.summary_writer.log_dir) / "best_model.pth"
+                if best_model_path.exists():
+                    self.model.load_state_dict(torch.load(best_model_path, weights_only=True))
+                
+                test_loss, test_accuracy = self.test(self.test_loader)
+                print(f"Epoch {epoch+1}: Test accuracy: {test_accuracy * 100:.2f}%, Test loss: {test_loss:.5f}")
+                
+                self.summary_writer.add_scalar("test_accuracy", test_accuracy, epoch)
+                self.summary_writer.add_scalar("test_loss", test_loss, epoch)
+                
                 self.model.train()
         best_model_path = Path(self.summary_writer.log_dir) / "best_model.pth"
         if best_model_path.exists():
@@ -440,7 +502,11 @@ def get_summary_writer_log_dir(args: argparse.Namespace) -> str:
         from getting logged to the same TB log directory (which you can't easily
         untangle in TB).
     """
-    tb_log_dir_prefix = f'CNN_bs={args.batch_size}_lr={args.learning_rate}_run_'
+    # Format learning rate and weight decay for cleaner directory names
+    lr_str = f"{args.learning_rate:.0e}".replace("e-0", "e-")
+    wd_str = f"{args.weight_decay:.0e}".replace("e-0", "e-") if args.weight_decay > 0 else "0"
+    
+    tb_log_dir_prefix = f'opt={args.optimizer}_sched={args.scheduler}_bs={args.batch_size}_lr={lr_str}_wd={wd_str}_run_'
     i = 0
     while i < 1000:
         tb_log_dir = args.log_dir / (tb_log_dir_prefix + str(i))
