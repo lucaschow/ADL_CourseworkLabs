@@ -8,14 +8,13 @@ No safety limits - runs indefinitely until targets are achieved.
 """
 import subprocess
 import re
-import shutil
-import hashlib
 import secrets
+import shutil
 from pathlib import Path
 
 def find_latest_log_dir(config, run_id):
     """Find the most recently created log directory for this config"""
-    log_base = Path("logs")
+    log_base = Path("brute_force_logs")
     if not log_base.exists():
         return None
     
@@ -31,8 +30,60 @@ def find_latest_log_dir(config, run_id):
     # Return most recently modified
     return max(matching_dirs, key=lambda p: p.stat().st_mtime)
 
+def create_final_summary():
+    """Find and copy target models to central location + create summary file"""
+    brute_force_logs = Path("brute_force_logs")
+    final_models_dir = Path("final_models")
+    final_models_dir.mkdir(exist_ok=True)
+    
+    summary_lines = []
+    summary_lines.append("="*80)
+    summary_lines.append("TARGET MODELS SUMMARY")
+    summary_lines.append("="*80)
+    summary_lines.append("")
+    
+    if brute_force_logs.exists():
+        target_models = {
+            47: [],
+            46: [],
+            48: []
+        }
+        
+        for log_dir in brute_force_logs.iterdir():
+            if log_dir.is_dir():
+                for target in [47, 46, 48]:
+                    model_path = log_dir / f"best_model_{target}.pth"
+                    if model_path.exists():
+                        target_models[target].append((str(log_dir), model_path))
+        
+        for target in [47, 46, 48]:
+            if target_models[target]:
+                summary_lines.append(f"✓ best_model_{target}.pth:")
+                # Copy to final_models with clear name (keep latest if multiple)
+                latest_model = max(target_models[target], key=lambda x: Path(x[0]).stat().st_mtime)
+                final_name = f"best_model_{target}.pth"
+                final_path = final_models_dir / final_name
+                shutil.copy2(latest_model[1], final_path)
+                summary_lines.append(f"  - final_models/{final_name} (from {latest_model[0]})")
+                if len(target_models[target]) > 1:
+                    summary_lines.append(f"  - Note: {len(target_models[target])} models found, using latest")
+            else:
+                summary_lines.append(f"✗ best_model_{target}.pth NOT FOUND")
+        
+        # Write summary to file
+        summary_file = final_models_dir / "TARGET_MODELS_SUMMARY.txt"
+        with open(summary_file, 'w') as f:
+            f.write('\n'.join(summary_lines))
+        return summary_file
+    else:
+        summary_lines.append("brute_force_logs directory does not exist")
+        summary_file = final_models_dir / "TARGET_MODELS_SUMMARY.txt"
+        with open(summary_file, 'w') as f:
+            f.write('\n'.join(summary_lines))
+        return summary_file
+
 def run_training(config, run_number, target_accuracy, run_id):
-    """Run training with given configuration. Only saves model if it hits target accuracy."""
+    """Run training with given configuration. Saves to brute_force_logs directory."""
     cmd = [
         'python', 'src/train_siamese.py',
         '--optimizer', config['optimizer'],
@@ -42,7 +93,8 @@ def run_training(config, run_number, target_accuracy, run_id):
         '--weight-decay', str(config['weight_decay']),
         '--dropout', '0.5',
         '--epochs', '20',
-        '--run-id', run_id
+        '--run-id', run_id,
+        '--log-dir', 'brute_force_logs'
     ]
     
     print(f"\n{'='*80}")
@@ -66,15 +118,20 @@ def run_training(config, run_number, target_accuracy, run_id):
     # Find the log directory that was just created
     log_dir = find_latest_log_dir(config, run_id)
     
-    # Only keep model if it meets target, otherwise delete everything
+    # If model meets target, create a clearly named copy (NO DELETION - just naming)
     if test_acc is not None and log_dir:
-        if test_acc >= target_accuracy:
-            print(f"✓ Model saved! Test accuracy {test_acc:.2f}% >= target {target_accuracy}%")
-        else:
-            print(f"✗ Deleting model - Test accuracy {test_acc:.2f}% < target {target_accuracy}%")
-            # Delete the entire log directory (including best_model.pth)
-            shutil.rmtree(log_dir)
-            log_dir = None
+        best_model_path = Path(log_dir) / "best_model.pth"
+        if best_model_path.exists():
+            if test_acc >= target_accuracy:
+                # Create clearly named copy based on target
+                target_name = f"best_model_{int(target_accuracy)}.pth"
+                target_path = Path(log_dir) / target_name
+                shutil.copy2(best_model_path, target_path)
+                print(f"✓ TARGET ACHIEVED! Test accuracy {test_acc:.2f}% >= target {target_accuracy}%")
+                print(f"  Model saved as: {target_name} (original best_model.pth also kept)")
+            else:
+                print(f"⚠ Test accuracy {test_acc:.2f}% < target {target_accuracy}%")
+                print(f"  Model saved as best_model.pth (no target-specific copy)")
     
     return test_acc, result.returncode == 0
 
@@ -214,6 +271,9 @@ def main():
             print(f"\n\n{'='*80}")
             print("INTERRUPTED BY USER")
             print(f"{'='*80}\n")
+            # Still create summary even if interrupted
+            summary_file = create_final_summary()
+            print(f"✓ Summary saved to: {summary_file}")
             break
     
     # Final summary
@@ -227,6 +287,17 @@ def main():
             print(f"  Best: {best:.2f}%")
             print(f"  Total runs: {len(results[i])}")
             print(f"  All results: {[f'{a:.2f}%' for a in sorted(results[i], reverse=True)[:10]]}")  # Show top 10
+    
+    # Find and copy target models to central location + create summary file
+    print("\n" + "="*80)
+    print("TARGET MODELS LOCATION:")
+    print("="*80)
+    summary_file = create_final_summary()
+    print(f"✓ Summary saved to: {summary_file}")
+    print(f"✓ Target models copied to: final_models/")
+    print(f"  - final_models/best_model_47.pth")
+    print(f"  - final_models/best_model_46.pth")
+    print(f"  - final_models/best_model_48.pth")
 
 if __name__ == "__main__":
     main()
