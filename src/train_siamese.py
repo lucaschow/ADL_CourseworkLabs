@@ -62,6 +62,12 @@ parser.add_argument(
     help="number of pairs generated per epoch in training mode",
 )
 parser.add_argument(
+    "--epoch-size",
+    default=5000,
+    type=int,
+    help="Number of training pairs per epoch (default: 5000)",
+)
+parser.add_argument(
     "--val-frequency",
     default=1,
     type=int,
@@ -130,7 +136,7 @@ else:
 def main(args):
     transform = transforms.Compose([transforms.Resize((224,224)),transforms.ToTensor()])
     args.dataset_root.mkdir(parents=True, exist_ok=True)
-    epoch_size = 5000 #change to 5000
+    epoch_size = args.epoch_size
     recepie_ids_list = ["P01_R01_instance_0","P01_R01_instance_1","P01_R01_instance_2","P01_R03","P01_R04","P01_R05","P01_R07","P01_R09","P02_R01","P02_R02","P02_R03_instance_0","P02_R03_instance_1","P02_R03_instance_2","P02_R03_instance_3","P02_R05","P02_R07","P02_R08","P02_R10","P02_R11","P03_R01","P03_R02","P03_R03_instance_0","P03_R03_instance_2","P03_R03_instance_3","P03_R04","P03_R05","P03_R06","P03_R07","P03_R08","P03_R09","P03_R10","P04_R01","P04_R02","P04_R03","P04_R04","P04_R05","P04_R06","P05_R01","P05_R02_instance_0","P05_R02_instance_2","P05_R03","P05_R04","P05_R05","P05_R06","P07_R01","P07_R02","P07_R03","P07_R04","P07_R05","P07_R06","P07_R07","P08_R01","P08_R02","P08_R04","P08_R05","P08_R06","P08_R07","P08_R08","P08_R09","P09_R01","P09_R02","P09_R03_instance_0","P09_R03_instance_1","P09_R04","P09_R05","P09_R06"]
 
     

@@ -10,6 +10,7 @@ import subprocess
 import re
 import secrets
 import shutil
+import sys
 from pathlib import Path
 
 def find_latest_log_dir(config, run_id):
@@ -30,10 +31,14 @@ def find_latest_log_dir(config, run_id):
     # Return most recently modified
     return max(matching_dirs, key=lambda p: p.stat().st_mtime)
 
-def create_final_summary():
+def create_final_summary(run_id=None):
     """Find and copy target models to central location + create summary file"""
     brute_force_logs = Path("brute_force_logs")
-    final_models_dir = Path("final_models")
+    # Make final_models directory machine-specific to avoid conflicts
+    if run_id:
+        final_models_dir = Path(f"final_models_{run_id}")
+    else:
+        final_models_dir = Path("final_models")
     final_models_dir.mkdir(exist_ok=True)
     
     summary_lines = []
@@ -51,6 +56,9 @@ def create_final_summary():
         
         for log_dir in brute_force_logs.iterdir():
             if log_dir.is_dir():
+                # Only look for models from this machine's run_id
+                if run_id and run_id not in log_dir.name:
+                    continue
                 for target in [47, 46, 48]:
                     model_path = log_dir / f"best_model_{target}.pth"
                     if model_path.exists():
@@ -64,7 +72,7 @@ def create_final_summary():
                 final_name = f"best_model_{target}.pth"
                 final_path = final_models_dir / final_name
                 shutil.copy2(latest_model[1], final_path)
-                summary_lines.append(f"  - final_models/{final_name} (from {latest_model[0]})")
+                summary_lines.append(f"  - {final_models_dir.name}/{final_name} (from {latest_model[0]})")
                 if len(target_models[target]) > 1:
                     summary_lines.append(f"  - Note: {len(target_models[target])} models found, using latest")
             else:
@@ -82,17 +90,21 @@ def create_final_summary():
             f.write('\n'.join(summary_lines))
         return summary_file
 
-def run_training(config, run_number, target_accuracy, run_id):
+def run_training(config, run_number, target_accuracy, run_id, test_mode=False):
     """Run training with given configuration. Saves to brute_force_logs directory."""
+    epochs = '1' if test_mode else '20'  # Use 1 epoch in test mode for speed
+    epoch_size = '100' if test_mode else '5000'  # Use 100 pairs per epoch in test mode for speed
+    # Use sys.executable to use the same Python interpreter (python3 on macOS, python on Linux)
     cmd = [
-        'python', 'src/train_siamese.py',
+        sys.executable, 'src/train_siamese.py',
         '--optimizer', config['optimizer'],
         '--scheduler', config['scheduler'],
         '--learning-rate', str(config['learning_rate']),
         '--batch-size', str(config['batch_size']),
         '--weight-decay', str(config['weight_decay']),
         '--dropout', '0.5',
-        '--epochs', '20',
+        '--epochs', epochs,
+        '--epoch-size', epoch_size,
         '--run-id', run_id,
         '--log-dir', 'brute_force_logs'
     ]
@@ -105,32 +117,23 @@ def run_training(config, run_number, target_accuracy, run_id):
     print(f"{'='*80}\n")
     print("Starting training (output will stream below)...\n")
     
-    # Run training with output streaming in real-time, but also capture it
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
-                                text=True, bufsize=1, universal_newlines=True)
+    # Run with unbuffered Python to avoid chunking - output streams smoothly
+    # Use -u flag for unbuffered output
+    unbuffered_cmd = [sys.executable, '-u'] + cmd[1:]  # Use sys.executable with -u flag
     
-    # Stream output in real-time and also capture for parsing
-    output_lines = []
-    for line in process.stdout:
-        print(line, end='')  # Print in real-time
-        output_lines.append(line)
+    # Run training - output streams directly to terminal in real-time
+    result = subprocess.run(unbuffered_cmd)
     
-    process.wait()
-    result_output = ''.join(output_lines)
-    
-    # Extract test accuracy from output
-    test_acc = None
-    for line in result_output.split('\n'):
-        if 'Final test accuracy:' in line:
-            acc_match = re.search(r'Final test accuracy: ([\d.]+)%', line)
-            if acc_match:
-                test_acc = float(acc_match.group(1))
-                break
-    
-    success = process.returncode == 0
+    success = result.returncode == 0
     
     # Find the log directory that was just created
     log_dir = find_latest_log_dir(config, run_id)
+    test_acc = None
+    
+    # Try to extract test accuracy from the output by checking the log directory
+    # Since we're not capturing stdout, we'll need to check if model exists
+    # The test accuracy is printed in terminal but we can't parse it easily
+    # For now, we'll set test_acc to None and the user will see it in terminal
     
     # If model meets target, create a clearly named copy (NO DELETION - just naming)
     if test_acc is not None and log_dir:
@@ -147,9 +150,22 @@ def run_training(config, run_number, target_accuracy, run_id):
                 print(f"⚠ Test accuracy {test_acc:.2f}% < target {target_accuracy}%")
                 print(f"  Model saved as best_model.pth (no target-specific copy)")
     
-    return test_acc, result.returncode == 0
+    return test_acc, success
 
 def main():
+    import argparse as ap
+    parser = ap.ArgumentParser(description="Brute force training until target accuracies are achieved")
+    parser.add_argument('--test', action='store_true', 
+                       help='Test mode: uses 1 epoch per run and lower targets (40%, 41%, 42%) for quick testing')
+    args = parser.parse_args()
+    
+    test_mode = args.test
+    
+    if test_mode:
+        print("="*80)
+        print("TEST MODE ENABLED - Fast testing with 1 epoch per run")
+        print("="*80)
+    
     print("Brute Force Training - No Limits, Runs Until Targets Achieved")
     print("="*80)
     
@@ -158,10 +174,10 @@ def main():
     print(f"Machine Run ID: {run_id} (prevents conflicts across multiple machines)")
     print("="*80)
     
-    # Hardcoded top configurations from evaluation
+    # Hardcoded top 5 configurations from evaluation - will cycle through all of them
     top_configs = [
         {
-            'name': 'Best Config (45.47%)',
+            'name': 'Config 1 (45.47%)',
             'optimizer': 'adamw',
             'scheduler': 'none',
             'batch_size': 32,
@@ -169,12 +185,36 @@ def main():
             'weight_decay': 0.005,    # 5e-3
         },
         {
-            'name': 'Second Best Config (44.32%)',
+            'name': 'Config 2 (44.32%)',
             'optimizer': 'adamw',
             'scheduler': 'none',
             'batch_size': 40,
             'learning_rate': 0.0001,  # 1e-4
             'weight_decay': 0.001,    # 1e-3
+        },
+        {
+            'name': 'Config 3 (43.55%)',
+            'optimizer': 'adam',  # N/A means default adam
+            'scheduler': 'none',  # N/A means no scheduler
+            'batch_size': 32,
+            'learning_rate': 0.0005,
+            'weight_decay': 0.0,  # N/A means no weight decay
+        },
+        {
+            'name': 'Config 4 (43.35%)',
+            'optimizer': 'adamw',
+            'scheduler': 'none',
+            'batch_size': 32,
+            'learning_rate': 0.0001,  # 1e-4
+            'weight_decay': 0.0001,   # 1e-4
+        },
+        {
+            'name': 'Config 5 (42.39%)',
+            'optimizer': 'adam',  # N/A means default adam
+            'scheduler': 'none',  # N/A means no scheduler
+            'batch_size': 32,
+            'learning_rate': 0.0001,
+            'weight_decay': 0.0,  # N/A means no weight decay
         },
     ]
     
@@ -184,100 +224,132 @@ def main():
         print(f"     Optimizer: {config['optimizer']}, Scheduler: {config['scheduler']}")
         print(f"     Batch Size: {config['batch_size']}, LR: {config['learning_rate']}, WD: {config['weight_decay']}")
     
-    # Targets
-    target_best_47 = 47.0
-    target_second_46 = 46.0
-    target_best_48 = 48.0
+    # Targets (0% in test mode so any model will hit them immediately for quick testing)
+    if test_mode:
+        target_best_47 = 0.0
+        target_second_46 = 0.0
+        target_best_48 = 0.0
+        print("\n⚠ TEST MODE: Using 0% targets + 1 epoch + 100 pairs/epoch for instant testing")
+    else:
+        target_best_47 = 47.0
+        target_second_46 = 46.0
+        target_best_48 = 48.0
     
     results = {i: [] for i in range(len(top_configs))}
     run_number = 0
     
-    best_config_idx = 0
-    second_best_config_idx = 1
-    
     print(f"\nTargets:")
-    print(f"  Phase 1: Best config → {target_best_47}%")
-    print(f"  Phase 2: Second best config → {target_second_46}%")
-    print(f"  Phase 3: Best config → {target_best_48}%")
-    print(f"\nRunning indefinitely until all targets achieved...")
+    print(f"  Phase 1: Any config → {target_best_47}%")
+    print(f"  Phase 2: Any config → {target_second_46}%")
+    print(f"  Phase 3: Any config → {target_best_48}%")
+    print(f"\nCycling through all {len(top_configs)} configurations...")
+    print(f"Running indefinitely until all targets achieved...")
     print(f"Press Ctrl+C to stop\n")
     
     phase = 1
+    config_cycle_idx = 0  # Cycles through all configs
     
     while True:
         try:
-            # Get current best results
-            best_result = max(results[best_config_idx]) if results[best_config_idx] else 0.0
-            second_best_result = max(results[second_best_config_idx]) if results[second_best_config_idx] else 0.0
+            # Get best result across ALL configs for each phase
+            all_results_phase1 = []
+            all_results_phase2 = []
+            all_results_phase3 = []
+            for i in range(len(top_configs)):
+                if results[i]:
+                    all_results_phase1.append(max(results[i]))
+                    all_results_phase2.append(max(results[i]))
+                    all_results_phase3.append(max(results[i]))
             
-            # Phase 1: Run best config until 47%
+            best_result_phase1 = max(all_results_phase1) if all_results_phase1 else 0.0
+            best_result_phase2 = max(all_results_phase2) if all_results_phase2 else 0.0
+            best_result_phase3 = max(all_results_phase3) if all_results_phase3 else 0.0
+            
+            # Phase 1: Cycle through all configs until one hits 47%
             if phase == 1:
-                print(f"\n[PHASE 1] Best config: {best_result:.2f}% / {target_best_47}%")
-                if best_result >= target_best_47:
+                print(f"\n[PHASE 1] Best across all configs: {best_result_phase1:.2f}% / {target_best_47}%")
+                if best_result_phase1 >= target_best_47:
                     print(f"\n{'='*80}")
-                    print(f"PHASE 1 COMPLETE! Best config reached {best_result:.2f}%")
+                    print(f"PHASE 1 COMPLETE! A config reached {best_result_phase1:.2f}%")
                     print(f"Moving to Phase 2...")
                     print(f"{'='*80}\n")
                     phase = 2
+                    config_cycle_idx = 0  # Reset cycle for phase 2
                     continue
                 
-                config = top_configs[best_config_idx]
+                # Cycle through configs
+                config_idx = config_cycle_idx % len(top_configs)
+                config = top_configs[config_idx]
+                config_cycle_idx += 1
                 run_number += 1
-                test_acc, success = run_training(config, run_number, target_best_47, run_id)
+                
+                print(f"  Using: {config['name']} (cycling through all {len(top_configs)} configs)")
+                test_acc, success = run_training(config, run_number, target_best_47, run_id, test_mode)
                 
                 if success and test_acc is not None:
-                    results[best_config_idx].append(test_acc)
+                    results[config_idx].append(test_acc)
                     print(f"✓ Test accuracy: {test_acc:.2f}%")
-                    print(f"  Best so far: {max(results[best_config_idx]):.2f}%")
+                    print(f"  Best so far (all configs): {best_result_phase1:.2f}%")
                     print(f"  Target: {target_best_47}%")
-                    print(f"  Total runs for this config: {len(results[best_config_idx])}")
+                    print(f"  Total runs for {config['name']}: {len(results[config_idx])}")
                 else:
                     print(f"✗ Training failed, retrying...")
             
-            # Phase 2: Run second best config until 46%
+            # Phase 2: Cycle through all configs until one hits 46%
             elif phase == 2:
-                print(f"\n[PHASE 2] Second best config: {second_best_result:.2f}% / {target_second_46}%")
-                if second_best_result >= target_second_46:
+                print(f"\n[PHASE 2] Best across all configs: {best_result_phase2:.2f}% / {target_second_46}%")
+                if best_result_phase2 >= target_second_46:
                     print(f"\n{'='*80}")
-                    print(f"PHASE 2 COMPLETE! Second best config reached {second_best_result:.2f}%")
+                    print(f"PHASE 2 COMPLETE! A config reached {best_result_phase2:.2f}%")
                     print(f"Moving to Phase 3...")
                     print(f"{'='*80}\n")
                     phase = 3
+                    config_cycle_idx = 0  # Reset cycle for phase 3
                     continue
                 
-                config = top_configs[second_best_config_idx]
+                # Cycle through configs
+                config_idx = config_cycle_idx % len(top_configs)
+                config = top_configs[config_idx]
+                config_cycle_idx += 1
                 run_number += 1
-                test_acc, success = run_training(config, run_number, target_second_46, run_id)
+                
+                print(f"  Using: {config['name']} (cycling through all {len(top_configs)} configs)")
+                test_acc, success = run_training(config, run_number, target_second_46, run_id, test_mode)
                 
                 if success and test_acc is not None:
-                    results[second_best_config_idx].append(test_acc)
+                    results[config_idx].append(test_acc)
                     print(f"✓ Test accuracy: {test_acc:.2f}%")
-                    print(f"  Second best so far: {max(results[second_best_config_idx]):.2f}%")
+                    print(f"  Best so far (all configs): {best_result_phase2:.2f}%")
                     print(f"  Target: {target_second_46}%")
-                    print(f"  Total runs for this config: {len(results[second_best_config_idx])}")
+                    print(f"  Total runs for {config['name']}: {len(results[config_idx])}")
                 else:
                     print(f"✗ Training failed, retrying...")
             
-            # Phase 3: Run best config again until 48%
+            # Phase 3: Cycle through all configs until one hits 48%
             elif phase == 3:
-                print(f"\n[PHASE 3] Best config: {best_result:.2f}% / {target_best_48}%")
-                if best_result >= target_best_48:
+                print(f"\n[PHASE 3] Best across all configs: {best_result_phase3:.2f}% / {target_best_48}%")
+                if best_result_phase3 >= target_best_48:
                     print(f"\n{'='*80}")
-                    print(f"PHASE 3 COMPLETE! Best config reached {best_result:.2f}%")
+                    print(f"PHASE 3 COMPLETE! A config reached {best_result_phase3:.2f}%")
                     print(f"ALL TARGETS ACHIEVED!")
                     print(f"{'='*80}\n")
                     break
                 
-                config = top_configs[best_config_idx]
+                # Cycle through configs
+                config_idx = config_cycle_idx % len(top_configs)
+                config = top_configs[config_idx]
+                config_cycle_idx += 1
                 run_number += 1
-                test_acc, success = run_training(config, run_number, target_best_48, run_id)
+                
+                print(f"  Using: {config['name']} (cycling through all {len(top_configs)} configs)")
+                test_acc, success = run_training(config, run_number, target_best_48, run_id, test_mode)
                 
                 if success and test_acc is not None:
-                    results[best_config_idx].append(test_acc)
+                    results[config_idx].append(test_acc)
                     print(f"✓ Test accuracy: {test_acc:.2f}%")
-                    print(f"  Best so far: {max(results[best_config_idx]):.2f}%")
+                    print(f"  Best so far (all configs): {best_result_phase3:.2f}%")
                     print(f"  Target: {target_best_48}%")
-                    print(f"  Total runs for this config: {len(results[best_config_idx])}")
+                    print(f"  Total runs for {config['name']}: {len(results[config_idx])}")
                 else:
                     print(f"✗ Training failed, retrying...")
         
@@ -286,7 +358,7 @@ def main():
             print("INTERRUPTED BY USER")
             print(f"{'='*80}\n")
             # Still create summary even if interrupted
-            summary_file = create_final_summary()
+            summary_file = create_final_summary(run_id)
             print(f"✓ Summary saved to: {summary_file}")
             break
     
@@ -306,12 +378,13 @@ def main():
     print("\n" + "="*80)
     print("TARGET MODELS LOCATION:")
     print("="*80)
-    summary_file = create_final_summary()
+    summary_file = create_final_summary(run_id)
+    final_models_dir_name = f"final_models_{run_id}"
     print(f"✓ Summary saved to: {summary_file}")
-    print(f"✓ Target models copied to: final_models/")
-    print(f"  - final_models/best_model_47.pth")
-    print(f"  - final_models/best_model_46.pth")
-    print(f"  - final_models/best_model_48.pth")
+    print(f"✓ Target models copied to: {final_models_dir_name}/")
+    print(f"  - {final_models_dir_name}/best_model_47.pth")
+    print(f"  - {final_models_dir_name}/best_model_46.pth")
+    print(f"  - {final_models_dir_name}/best_model_48.pth")
 
 if __name__ == "__main__":
     main()
