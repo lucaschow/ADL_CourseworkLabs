@@ -378,7 +378,16 @@ class Trainer:
                 # self.validate() will put the model in validation mode,
                 # so we have to switch back to train mode afterwards
                 self.model.train()
-            
+            if ((epoch +1) % 2) == 0:
+                best_model_path = Path(self.summary_writer.log_dir) / "best_model.pth"
+                if best_model_path.exists():
+                    self.model.load_state_dict(torch.load(best_model_path, weights_only=True))
+                
+                test_loss, test_accuracy = self.test(self.test_loader)
+                print(f"Epoch {epoch+1}: Test accuracy: {test_accuracy *100:,.2f}%, Test loss: {test_loss:.5f}")
+
+                self.summary_writer.add_scalar("test_accuracy", test_accuracy, epoch)
+                self.summary_writer.add_scalar("test_loss", test_loss)
             # Step scheduler after each epoch (for cosine annealing)
             if self.scheduler is not None and not isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
                 self.scheduler.step()
