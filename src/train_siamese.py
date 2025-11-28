@@ -180,6 +180,7 @@ def main(args):
 
     log_dir = get_summary_writer_log_dir(args)
     print(f"Writing logs to {log_dir}")
+    print(f"Training with: optimizer={args.optimizer}, lr={args.learning_rate}, batch_size={args.batch_size}, weight_decay={args.weight_decay}, dropout={args.dropout}, scheduler={args.scheduler}")
     summary_writer = SummaryWriter(
             str(log_dir),
             flush_secs=5
