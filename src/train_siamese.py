@@ -57,12 +57,6 @@ parser.add_argument(
 )
 parser.add_argument(
     "--epoch-size",
-    default=500,
-    type=int,
-    help="number of pairs generated per epoch in training mode",
-)
-parser.add_argument(
-    "--epoch-size",
     default=5000,
     type=int,
     help="Number of training pairs per epoch (default: 5000)",
