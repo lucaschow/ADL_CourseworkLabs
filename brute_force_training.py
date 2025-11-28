@@ -103,17 +103,31 @@ def run_training(config, run_number, target_accuracy, run_id):
     print(f"  Batch Size: {config['batch_size']}, LR: {config['learning_rate']}, WD: {config['weight_decay']}")
     print(f"  Target accuracy: {target_accuracy}%")
     print(f"{'='*80}\n")
+    print("Starting training (output will stream below)...\n")
     
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # Run training with output streaming in real-time, but also capture it
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+                                text=True, bufsize=1, universal_newlines=True)
+    
+    # Stream output in real-time and also capture for parsing
+    output_lines = []
+    for line in process.stdout:
+        print(line, end='')  # Print in real-time
+        output_lines.append(line)
+    
+    process.wait()
+    result_output = ''.join(output_lines)
     
     # Extract test accuracy from output
     test_acc = None
-    for line in result.stdout.split('\n'):
+    for line in result_output.split('\n'):
         if 'Final test accuracy:' in line:
             acc_match = re.search(r'Final test accuracy: ([\d.]+)%', line)
             if acc_match:
                 test_acc = float(acc_match.group(1))
                 break
+    
+    success = process.returncode == 0
     
     # Find the log directory that was just created
     log_dir = find_latest_log_dir(config, run_id)
