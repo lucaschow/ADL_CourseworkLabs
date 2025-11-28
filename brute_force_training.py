@@ -8,11 +8,31 @@ No safety limits - runs indefinitely until targets are achieved.
 """
 import subprocess
 import re
-import time
+import shutil
+import hashlib
+import secrets
 from pathlib import Path
 
-def run_training(config, run_number):
-    """Run training with given configuration"""
+def find_latest_log_dir(config, run_id):
+    """Find the most recently created log directory for this config"""
+    log_base = Path("logs")
+    if not log_base.exists():
+        return None
+    
+    # Build pattern to match this config (including run_id)
+    lr_str = f"{config['learning_rate']:.0e}".replace("e-0", "e-")
+    wd_str = f"{config['weight_decay']:.0e}".replace("e-0", "e-") if config['weight_decay'] > 0 else "0"
+    pattern = f"opt={config['optimizer']}_sched={config['scheduler']}_bs={config['batch_size']}_lr={lr_str}_wd={wd_str}_{run_id}_run_"
+    
+    matching_dirs = [d for d in log_base.iterdir() if d.is_dir() and d.name.startswith(pattern)]
+    if not matching_dirs:
+        return None
+    
+    # Return most recently modified
+    return max(matching_dirs, key=lambda p: p.stat().st_mtime)
+
+def run_training(config, run_number, target_accuracy, run_id):
+    """Run training with given configuration. Only saves model if it hits target accuracy."""
     cmd = [
         'python', 'src/train_siamese.py',
         '--optimizer', config['optimizer'],
@@ -21,13 +41,15 @@ def run_training(config, run_number):
         '--batch-size', str(config['batch_size']),
         '--weight-decay', str(config['weight_decay']),
         '--dropout', '0.5',
-        '--epochs', '20'
+        '--epochs', '20',
+        '--run-id', run_id
     ]
     
     print(f"\n{'='*80}")
     print(f"Run #{run_number} - Config: {config['name']}")
     print(f"  Optimizer: {config['optimizer']}, Scheduler: {config['scheduler']}")
     print(f"  Batch Size: {config['batch_size']}, LR: {config['learning_rate']}, WD: {config['weight_decay']}")
+    print(f"  Target accuracy: {target_accuracy}%")
     print(f"{'='*80}\n")
     
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -41,10 +63,28 @@ def run_training(config, run_number):
                 test_acc = float(acc_match.group(1))
                 break
     
+    # Find the log directory that was just created
+    log_dir = find_latest_log_dir(config, run_id)
+    
+    # Only keep model if it meets target, otherwise delete everything
+    if test_acc is not None and log_dir:
+        if test_acc >= target_accuracy:
+            print(f"✓ Model saved! Test accuracy {test_acc:.2f}% >= target {target_accuracy}%")
+        else:
+            print(f"✗ Deleting model - Test accuracy {test_acc:.2f}% < target {target_accuracy}%")
+            # Delete the entire log directory (including best_model.pth)
+            shutil.rmtree(log_dir)
+            log_dir = None
+    
     return test_acc, result.returncode == 0
 
 def main():
     print("Brute Force Training - No Limits, Runs Until Targets Achieved")
+    print("="*80)
+    
+    # Generate unique run ID for this machine to prevent conflicts
+    run_id = secrets.token_hex(4)  # 8 character hex string
+    print(f"Machine Run ID: {run_id} (prevents conflicts across multiple machines)")
     print("="*80)
     
     # Hardcoded top configurations from evaluation
@@ -112,7 +152,7 @@ def main():
                 
                 config = top_configs[best_config_idx]
                 run_number += 1
-                test_acc, success = run_training(config, run_number)
+                test_acc, success = run_training(config, run_number, target_best_47, run_id)
                 
                 if success and test_acc is not None:
                     results[best_config_idx].append(test_acc)
@@ -122,8 +162,6 @@ def main():
                     print(f"  Total runs for this config: {len(results[best_config_idx])}")
                 else:
                     print(f"✗ Training failed, retrying...")
-                
-                time.sleep(2)
             
             # Phase 2: Run second best config until 46%
             elif phase == 2:
@@ -138,7 +176,7 @@ def main():
                 
                 config = top_configs[second_best_config_idx]
                 run_number += 1
-                test_acc, success = run_training(config, run_number)
+                test_acc, success = run_training(config, run_number, target_second_46, run_id)
                 
                 if success and test_acc is not None:
                     results[second_best_config_idx].append(test_acc)
@@ -148,8 +186,6 @@ def main():
                     print(f"  Total runs for this config: {len(results[second_best_config_idx])}")
                 else:
                     print(f"✗ Training failed, retrying...")
-                
-                time.sleep(2)
             
             # Phase 3: Run best config again until 48%
             elif phase == 3:
@@ -163,7 +199,7 @@ def main():
                 
                 config = top_configs[best_config_idx]
                 run_number += 1
-                test_acc, success = run_training(config, run_number)
+                test_acc, success = run_training(config, run_number, target_best_48, run_id)
                 
                 if success and test_acc is not None:
                     results[best_config_idx].append(test_acc)
@@ -173,8 +209,6 @@ def main():
                     print(f"  Total runs for this config: {len(results[best_config_idx])}")
                 else:
                     print(f"✗ Training failed, retrying...")
-                
-                time.sleep(2)
         
         except KeyboardInterrupt:
             print(f"\n\n{'='*80}")

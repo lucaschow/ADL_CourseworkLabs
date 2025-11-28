@@ -110,6 +110,10 @@ parser.add_argument("--T-max", type=int, default=None,
 parser.add_argument("--dropout", type=float, default=0.5,
     help="Dropout probability (0.0 to 1.0)")
 
+# Run ID for multi-machine runs
+parser.add_argument("--run-id", type=str, default=None,
+    help="Unique run identifier (e.g., random hash) to prevent conflicts across machines")
+
 
 class ImageShape(NamedTuple):
     height: int
@@ -516,7 +520,9 @@ def get_summary_writer_log_dir(args: argparse.Namespace) -> str:
     lr_str = f"{args.learning_rate:.0e}".replace("e-0", "e-")
     wd_str = f"{args.weight_decay:.0e}".replace("e-0", "e-") if args.weight_decay > 0 else "0"
     
-    tb_log_dir_prefix = f'opt={args.optimizer}_sched={args.scheduler}_bs={args.batch_size}_lr={lr_str}_wd={wd_str}_run_'
+    # Include run-id if provided (for multi-machine runs)
+    run_id_suffix = f"_{args.run_id}" if args.run_id else ""
+    tb_log_dir_prefix = f'opt={args.optimizer}_sched={args.scheduler}_bs={args.batch_size}_lr={lr_str}_wd={wd_str}{run_id_suffix}_run_'
     i = 0
     while i < 1000:
         tb_log_dir = args.log_dir / (tb_log_dir_prefix + str(i))
