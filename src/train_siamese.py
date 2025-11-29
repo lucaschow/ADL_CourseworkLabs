@@ -16,6 +16,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 
 import argparse
+import json
 from pathlib import Path
 
 torch.backends.cudnn.benchmark = True #Just improves training speeds, can see later if we want to keep
@@ -128,16 +129,28 @@ else:
 
 
 def main(args):
-    transform = transforms.Compose([transforms.Resize((224,224)),transforms.ToTensor()])
+    # Training transforms: with augmentation
+    train_tf = transforms.Compose([
+        transforms.Resize((224,224)),
+        transforms.RandomRotation(5),
+        transforms.RandomHorizontalFlip(0.5),
+        transforms.ToTensor()
+    ])
+    # Val/Test transforms: no augmentation
+    eval_tf = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor()
+    ])
+    
     args.dataset_root.mkdir(parents=True, exist_ok=True)
     epoch_size = args.epoch_size
     recepie_ids_list = ["P01_R01_instance_0","P01_R01_instance_1","P01_R01_instance_2","P01_R03","P01_R04","P01_R05","P01_R07","P01_R09","P02_R01","P02_R02","P02_R03_instance_0","P02_R03_instance_1","P02_R03_instance_2","P02_R03_instance_3","P02_R05","P02_R07","P02_R08","P02_R10","P02_R11","P03_R01","P03_R02","P03_R03_instance_0","P03_R03_instance_2","P03_R03_instance_3","P03_R04","P03_R05","P03_R06","P03_R07","P03_R08","P03_R09","P03_R10","P04_R01","P04_R02","P04_R03","P04_R04","P04_R05","P04_R06","P05_R01","P05_R02_instance_0","P05_R02_instance_2","P05_R03","P05_R04","P05_R05","P05_R06","P07_R01","P07_R02","P07_R03","P07_R04","P07_R05","P07_R06","P07_R07","P08_R01","P08_R02","P08_R04","P08_R05","P08_R06","P08_R07","P08_R08","P08_R09","P09_R01","P09_R02","P09_R03_instance_0","P09_R03_instance_1","P09_R04","P09_R05","P09_R06"]
 
     
-    train_dataset = ProgressionDataset(root_dir='dataset/train', transform=transform, mode='train', recipe_ids_list=recepie_ids_list, epoch_size=epoch_size)
+    train_dataset = ProgressionDataset(root_dir='dataset/train', transform=train_tf, mode='train', recipe_ids_list=recepie_ids_list, epoch_size=epoch_size)
     #you didnt load in the data correctly you melon - we only have train
-    test_dataset = ProgressionDataset(root_dir='dataset/test', transform=transform, mode='test', label_file='dataset/test_labels.txt')
-    val_dataset = ProgressionDataset(root_dir='dataset/val', transform=transform, mode='val', label_file='dataset/val_labels.txt')
+    test_dataset = ProgressionDataset(root_dir='dataset/test', transform=eval_tf, mode='test', label_file='dataset/test_labels.txt')
+    val_dataset = ProgressionDataset(root_dir='dataset/val', transform=eval_tf, mode='val', label_file='dataset/val_labels.txt')
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         shuffle=True,
@@ -202,6 +215,28 @@ def main(args):
     test_loss, test_accuracy = trainer.test(test_loader)
     print(f"Final test accuracy: {test_accuracy * 100:.2f}%")
     print(f"Final test loss: {test_loss:.5f}")
+    
+    # Save test results to JSON file in log directory
+    results_json = {
+        "test_accuracy": float(test_accuracy),
+        "test_accuracy_percent": float(test_accuracy * 100),
+        "test_loss": float(test_loss),
+        "hyperparameters": {
+            "optimizer": args.optimizer,
+            "scheduler": args.scheduler,
+            "batch_size": args.batch_size,
+            "learning_rate": args.learning_rate,
+            "weight_decay": args.weight_decay,
+            "dropout": args.dropout,
+            "epochs": args.epochs,
+            "epoch_size": args.epoch_size,
+        },
+        "augmentation": True,  # Always True now since we hardcoded it
+    }
+    results_file = Path(log_dir) / "test_results.json"
+    with open(results_file, 'w') as f:
+        json.dump(results_json, f, indent=2)
+    print(f"Test results saved to: {results_file}")
 
     summary_writer.close()
 
@@ -522,7 +557,8 @@ def get_summary_writer_log_dir(args: argparse.Namespace) -> str:
     
     # Include run-id if provided (for multi-machine runs)
     run_id_suffix = f"_{args.run_id}" if args.run_id else ""
-    tb_log_dir_prefix = f'opt={args.optimizer}_sched={args.scheduler}_bs={args.batch_size}_lr={lr_str}_wd={wd_str}{run_id_suffix}_run_'
+    # Add _aug suffix to distinguish augmented runs
+    tb_log_dir_prefix = f'opt={args.optimizer}_sched={args.scheduler}_bs={args.batch_size}_lr={lr_str}_wd={wd_str}_aug{run_id_suffix}_run_'
     i = 0
     while i < 1000:
         tb_log_dir = args.log_dir / (tb_log_dir_prefix + str(i))
