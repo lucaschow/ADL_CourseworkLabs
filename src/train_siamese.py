@@ -407,9 +407,18 @@ class Trainer:
             if ((epoch + 1) % val_frequency) == 0:
                 val_loss, val_accuracy = self.validate()
                 if val_accuracy > self.best_val_accuracy:
-                    torch.save(self.model.state_dict(), Path(self.summary_writer.log_dir) / "best_model.pth")
-                    self.best_val_accuracy = val_accuracy
-                    print(f"best model saved with validation accuracy", val_accuracy)
+                    best_model_path = Path(self.summary_writer.log_dir) / "best_model.pth"
+                    try:
+                        torch.save(self.model.state_dict(), best_model_path)
+                        self.best_val_accuracy = val_accuracy
+                        print(f"best model saved with validation accuracy", val_accuracy)
+                    except OSError as e:
+                        if "No space left" in str(e) or "Disk quota" in str(e) or e.errno == 122:
+                            print(f"ERROR: Disk full! Cannot save model. Stopping training.")
+                            print(f"Free up disk space and resume training.")
+                            raise  # Stop training - can't continue without saving
+                        else:
+                            raise  # Re-raise other OSErrors
                
                 # Step scheduler based on validation metric (for ReduceLROnPlateau)
                 if self.scheduler is not None and isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
@@ -421,7 +430,11 @@ class Trainer:
             if ((epoch +1) % 2) == 0:
                 best_model_path = Path(self.summary_writer.log_dir) / "best_model.pth"
                 if best_model_path.exists():
-                    self.model.load_state_dict(torch.load(best_model_path, weights_only=True))
+                    try:
+                        self.model.load_state_dict(torch.load(best_model_path, weights_only=True))
+                    except (RuntimeError, EOFError) as e:
+                        print(f"Warning: Could not load best_model.pth (may be corrupted): {e}")
+                        print("Continuing with current model state...")
                 
                 test_loss, test_accuracy = self.test(self.test_loader)
                 print(f"Epoch {epoch+1}: Test accuracy: {test_accuracy *100:,.2f}%, Test loss: {test_loss:.5f}")
@@ -435,7 +448,11 @@ class Trainer:
             if ((epoch + 1) % 5) == 0:
                 best_model_path = Path(self.summary_writer.log_dir) / "best_model.pth"
                 if best_model_path.exists():
-                    self.model.load_state_dict(torch.load(best_model_path, weights_only=True))
+                    try:
+                        self.model.load_state_dict(torch.load(best_model_path, weights_only=True))
+                    except (RuntimeError, EOFError) as e:
+                        print(f"Warning: Could not load best_model.pth (may be corrupted): {e}")
+                        print("Continuing with current model state...")
                 
                 test_loss, test_accuracy = self.test(self.test_loader)
                 print(f"Epoch {epoch+1}: Test accuracy: {test_accuracy * 100:.2f}%, Test loss: {test_loss:.5f}")
@@ -446,7 +463,11 @@ class Trainer:
                 self.model.train()
         best_model_path = Path(self.summary_writer.log_dir) / "best_model.pth"
         if best_model_path.exists():
-            self.model.load_state_dict(torch.load(best_model_path, weights_only=True))
+            try:
+                self.model.load_state_dict(torch.load(best_model_path, weights_only=True))
+            except (RuntimeError, EOFError) as e:
+                print(f"Warning: Could not load best_model.pth (may be corrupted): {e}")
+                print("Using final model state instead of best model...")
 
     def print_metrics(self, epoch, accuracy, loss, data_load_time, step_time):
         epoch_step = self.step % len(self.train_loader)
