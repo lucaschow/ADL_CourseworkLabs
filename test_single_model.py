@@ -138,7 +138,7 @@ def main():
         shuffle=False,
         batch_size=32,
         num_workers=0,
-        pin_memory=False,
+        pin_memory=True,  # Match evaluate_all_models.py
     )
     
     print(f"Test set size: {len(test_dataset)} samples")
@@ -146,9 +146,9 @@ def main():
     # Create and load model
     print(f"\nLoading model (dropout={args.dropout})...")
     model = Siamese(in_channels=3, dropout=args.dropout)
-    model.load_state_dict(torch.load(model_path, weights_only=True))
+    model.load_state_dict(torch.load(model_path, weights_only=True, map_location=DEVICE))
     model = model.to(DEVICE)
-    model.eval()
+    model.eval()  # This disables dropout during evaluation
     
     print("Evaluating on test set...")
     results = {"preds": [], "labels": []}

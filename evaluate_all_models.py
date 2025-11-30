@@ -8,8 +8,12 @@ import numpy as np
 from pathlib import Path
 import glob
 import re
+import sys
 from torch.utils.data import DataLoader
 from torchvision import transforms
+
+# Add src to path to ensure we use the same code
+sys.path.insert(0, str(Path(__file__).parent / "src"))
 from dataloader import ProgressionDataset
 from train_siamese import Siamese, compute_accuracy, DEVICE
 
@@ -56,13 +60,23 @@ def parse_config_from_dir(dir_name):
     
     return config
 
-def evaluate_model(model_path, test_loader, device):
+def evaluate_model(model_path, test_loader, device, dropout=0.5):
     """Load model and evaluate on test set"""
+    # Clear any cached state
+    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+    
     # Create model (dropout doesn't matter for eval, but we need to match architecture)
-    model = Siamese(in_channels=3, dropout=0.5)
-    model.load_state_dict(torch.load(model_path, weights_only=True))
+    model = Siamese(in_channels=3, dropout=dropout)
+    
+    # Load weights and ensure they're loaded correctly
+    state_dict = torch.load(model_path, weights_only=True, map_location=device)
+    model.load_state_dict(state_dict, strict=True)
     model = model.to(device)
-    model.eval()
+    model.eval()  # This disables dropout during evaluation
+    
+    # Ensure no gradients are tracked
+    for param in model.parameters():
+        param.requires_grad = False
     
     results = {"preds": [], "labels": []}
     total_loss = 0
@@ -84,6 +98,10 @@ def evaluate_model(model_path, test_loader, device):
         np.array(results["labels"]), np.array(results["preds"])
     )
     average_loss = total_loss / len(test_loader)
+    
+    # Clean up
+    del model
+    torch.cuda.empty_cache() if torch.cuda.is_available() else None
     
     return accuracy, average_loss
 
@@ -130,7 +148,7 @@ def main():
         print(f"  Config: {config}")
         
         try:
-            accuracy, loss = evaluate_model(model_path, test_loader, DEVICE)
+            accuracy, loss = evaluate_model(model_path, test_loader, DEVICE, dropout=0.5)
             results.append({
                 'path': str(model_path),
                 'dir': dir_name,
