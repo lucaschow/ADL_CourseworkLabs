@@ -131,7 +131,7 @@ else:
 def main(args):
     # Training transforms: with augmentation
     train_tf = transforms.Compose([
-        transforms.Resize((224,224)),
+        transforms.Resize((224, 224)),
         transforms.RandomRotation(5),
         transforms.RandomHorizontalFlip(0.5),
         transforms.ToTensor()
@@ -367,10 +367,8 @@ class Trainer:
         self.model.train()
         for epoch in range(start_epoch, epochs):
             self.model.train()
-            print("Starting training loop...")
             data_load_start_time = time.time()
             for img_a, img_b, labels in self.train_loader:
-                print(f"Batch loaded, shape: {img_a.shape}, {img_b.shape}")
                 img_a = img_a.to(self.device)
                 img_b = img_b.to(self.device)
                 labels = labels.to(self.device)
@@ -380,10 +378,6 @@ class Trainer:
                 loss.backward()
                 self.optimizer.step()
                 self.optimizer.zero_grad()
-
-                ## TASK 10: Compute the backward pass
-
-                ## TASK 12: Step the optimizer and then zero out the gradient buffers.
 
                 with torch.no_grad():
                     preds = logits.argmax(-1)
@@ -427,20 +421,6 @@ class Trainer:
                 # self.validate() will put the model in validation mode,
                 # so we have to switch back to train mode afterwards
                 self.model.train()
-            if ((epoch +1) % 2) == 0:
-                best_model_path = Path(self.summary_writer.log_dir) / "best_model.pth"
-                if best_model_path.exists():
-                    try:
-                        self.model.load_state_dict(torch.load(best_model_path, weights_only=True))
-                    except (RuntimeError, EOFError) as e:
-                        print(f"Warning: Could not load best_model.pth (may be corrupted): {e}")
-                        print("Continuing with current model state...")
-                
-                test_loss, test_accuracy = self.test(self.test_loader)
-                print(f"Epoch {epoch+1}: Test accuracy: {test_accuracy *100:,.2f}%, Test loss: {test_loss:.5f}")
-
-                self.summary_writer.add_scalar("test_accuracy", test_accuracy, epoch)
-                self.summary_writer.add_scalar("test_loss", test_loss)
             # Step scheduler after each epoch (for cosine annealing)
             if self.scheduler is not None and not isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
                 self.scheduler.step()
@@ -449,7 +429,7 @@ class Trainer:
                 best_model_path = Path(self.summary_writer.log_dir) / "best_model.pth"
                 if best_model_path.exists():
                     try:
-                        self.model.load_state_dict(torch.load(best_model_path, weights_only=True))
+                        self.model.load_state_dict(torch.load(best_model_path, weights_only=True, map_location=self.device))
                     except (RuntimeError, EOFError) as e:
                         print(f"Warning: Could not load best_model.pth (may be corrupted): {e}")
                         print("Continuing with current model state...")
@@ -464,7 +444,7 @@ class Trainer:
         best_model_path = Path(self.summary_writer.log_dir) / "best_model.pth"
         if best_model_path.exists():
             try:
-                self.model.load_state_dict(torch.load(best_model_path, weights_only=True))
+                self.model.load_state_dict(torch.load(best_model_path, weights_only=True, map_location=self.device))
             except (RuntimeError, EOFError) as e:
                 print(f"Warning: Could not load best_model.pth (may be corrupted): {e}")
                 print("Using final model state instead of best model...")
