@@ -1,0 +1,16 @@
+{
+  "test_accuracy": 0.45857418111753373,
+  "test_accuracy_percent": 45.857418111753375,
+  "test_loss": 1.5563756437862621,
+  "hyperparameters": {
+    "optimizer": "adam",
+    "scheduler": "none",
+    "batch_size": 32,
+    "learning_rate": 0.0001,
+    "weight_decay": 0.0,
+    "dropout": 0.5,
+    "epochs": 20,
+    "epoch_size": 5000
+  },
+  "augmentation": true
+}

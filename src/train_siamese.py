@@ -504,6 +504,12 @@ class Trainer:
                 preds = logits.argmax(dim=-1).cpu().numpy()
                 results["preds"].extend(list(preds))
                 results["labels"].extend(list(labels.cpu().numpy()))
+        num_classes = 3
+        conf_matrix = np.zeros((num_classes, num_classes), dtype=int)
+        for t, p in zip(results['labels'], results['preds']):
+            conf_matrix[t, p] +=1
+        print("Confusion Matrix")
+        print(conf_matrix)
 
         accuracy = compute_accuracy(
             np.array(results["labels"]), np.array(results["preds"])
