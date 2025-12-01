@@ -111,6 +111,10 @@ parser.add_argument("--T-max", type=int, default=None,
 parser.add_argument("--dropout", type=float, default=0.5,
     help="Dropout probability (0.0 to 1.0)")
 
+# Label smoothing
+parser.add_argument("--label-smoothing", type=float, default=0.0,
+    help="Label smoothing factor (0.0 = no smoothing, 0.1 = common value)")
+
 # Run ID for multi-machine runs
 parser.add_argument("--run-id", type=str, default=None,
     help="Unique run identifier (e.g., random hash) to prevent conflicts across machines")
@@ -176,7 +180,8 @@ def main(args):
     model = Siamese(in_channels=3, dropout=args.dropout) #was CNN
 
     ## TASK 8: Redefine the criterion to be softmax cross entropy
-    criterion = nn.CrossEntropyLoss()
+    # Use label smoothing if specified
+    criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
 
     # Create optimizer
     if args.optimizer.lower() == "adamw":
@@ -197,7 +202,7 @@ def main(args):
 
     log_dir = get_summary_writer_log_dir(args)
     print(f"Writing logs to {log_dir}")
-    print(f"Training with: optimizer={args.optimizer}, lr={args.learning_rate}, batch_size={args.batch_size}, weight_decay={args.weight_decay}, dropout={args.dropout}, scheduler={args.scheduler}")
+    print(f"Training with: optimizer={args.optimizer}, lr={args.learning_rate}, batch_size={args.batch_size}, weight_decay={args.weight_decay}, dropout={args.dropout}, label_smoothing={args.label_smoothing}, scheduler={args.scheduler}")
     summary_writer = SummaryWriter(
             str(log_dir),
             flush_secs=5
@@ -228,6 +233,7 @@ def main(args):
             "learning_rate": args.learning_rate,
             "weight_decay": args.weight_decay,
             "dropout": args.dropout,
+            "label_smoothing": args.label_smoothing,
             "epochs": args.epochs,
             "epoch_size": args.epoch_size,
         },
@@ -552,14 +558,17 @@ def get_summary_writer_log_dir(args: argparse.Namespace) -> str:
         from getting logged to the same TB log directory (which you can't easily
         untangle in TB).
     """
-    # Format learning rate and weight decay for cleaner directory names
+    # Format learning rate, weight decay, and label smoothing for cleaner directory names
     lr_str = f"{args.learning_rate:.0e}".replace("e-0", "e-")
     wd_str = f"{args.weight_decay:.0e}".replace("e-0", "e-") if args.weight_decay > 0 else "0"
+    ls_str = f"ls={args.label_smoothing}" if args.label_smoothing > 0 else ""
     
     # Include run-id if provided (for multi-machine runs)
     run_id_suffix = f"_{args.run_id}" if args.run_id else ""
     # Add _aug suffix to distinguish augmented runs
-    tb_log_dir_prefix = f'opt={args.optimizer}_sched={args.scheduler}_bs={args.batch_size}_lr={lr_str}_wd={wd_str}_aug{run_id_suffix}_run_'
+    # Include label smoothing in name if used
+    smoothing_part = f"_{ls_str}" if ls_str else ""
+    tb_log_dir_prefix = f'opt={args.optimizer}_sched={args.scheduler}_bs={args.batch_size}_lr={lr_str}_wd={wd_str}{smoothing_part}_aug{run_id_suffix}_run_'
     i = 0
     while i < 1000:
         tb_log_dir = args.log_dir / (tb_log_dir_prefix + str(i))
