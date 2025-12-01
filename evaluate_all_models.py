@@ -1,52 +1,45 @@
 #!/usr/bin/env python3
 """
 Evaluate all saved models from grid search on the test set.
-Finds all best_model.pth files, loads them, evaluates on test set, and reports results.
+Usage: python evaluate_all_models.py
 """
 import torch
 import numpy as np
 from pathlib import Path
-import glob
 import re
 import sys
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
-# Add src to path to ensure we use the same code
+# Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 from dataloader import ProgressionDataset
 from train_siamese import Siamese, compute_accuracy, DEVICE
 
 def parse_config_from_dir(dir_name):
-    """Extract hyperparameters from directory name like 'opt=adam_sched=none_bs=32_lr=1e-4_wd=1e-4_run_0'"""
+    """Extract hyperparameters from directory name"""
     config = {}
-    # Parse optimizer
     opt_match = re.search(r'opt=(\w+)', dir_name)
     if opt_match:
         config['optimizer'] = opt_match.group(1)
     
-    # Parse scheduler
     sched_match = re.search(r'sched=(\w+)', dir_name)
     if sched_match:
         config['scheduler'] = sched_match.group(1)
     
-    # Parse batch size
     bs_match = re.search(r'bs=(\d+)', dir_name)
     if bs_match:
         config['batch_size'] = int(bs_match.group(1))
     
-    # Parse learning rate
     lr_match = re.search(r'lr=([\d.e-]+)', dir_name)
     if lr_match:
         lr_str = lr_match.group(1)
-        # Convert "1e-4" to 0.0001
         if 'e' in lr_str:
             base, exp = lr_str.split('e-')
             config['learning_rate'] = float(base) * (10 ** -int(exp))
         else:
             config['learning_rate'] = float(lr_str)
     
-    # Parse weight decay
     wd_match = re.search(r'wd=([\d.e-]+)', dir_name)
     if wd_match:
         wd_str = wd_match.group(1)
@@ -61,23 +54,17 @@ def parse_config_from_dir(dir_name):
     return config
 
 def evaluate_model(model_path, test_loader, device, dropout=0.5):
-    """Load model and evaluate on test set"""
-    # Clear any cached state
-    torch.cuda.empty_cache() if torch.cuda.is_available() else None
-    
-    # Create model (dropout doesn't matter for eval, but we need to match architecture)
+    """Load model and evaluate on test set - IDENTICAL to test_single_model.py"""
+    # Create model
     model = Siamese(in_channels=3, dropout=dropout)
     
-    # Load weights and ensure they're loaded correctly
+    # Load weights
     state_dict = torch.load(model_path, weights_only=True, map_location=device)
     model.load_state_dict(state_dict, strict=True)
     model = model.to(device)
-    model.eval()  # This disables dropout during evaluation
+    model.eval()
     
-    # Ensure no gradients are tracked
-    for param in model.parameters():
-        param.requires_grad = False
-    
+    # Evaluate
     results = {"preds": [], "labels": []}
     total_loss = 0
     criterion = torch.nn.CrossEntropyLoss()
@@ -99,22 +86,18 @@ def evaluate_model(model_path, test_loader, device, dropout=0.5):
     )
     average_loss = total_loss / len(test_loader)
     
-    # Clean up
-    del model
-    torch.cuda.empty_cache() if torch.cuda.is_available() else None
-    
     return accuracy, average_loss
 
 def main():
-    # Setup test dataset - MUST match training code exactly
-    eval_tf = transforms.Compose([
+    # Setup test dataset - IDENTICAL to test_single_model.py
+    eval_transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor()
     ])
     
     test_dataset = ProgressionDataset(
         root_dir='dataset/test', 
-        transform=eval_tf, 
+        transform=eval_transform, 
         mode='test', 
         label_file='dataset/test_labels.txt'
     )
