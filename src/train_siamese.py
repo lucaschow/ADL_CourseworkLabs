@@ -119,6 +119,11 @@ parser.add_argument("--label-smoothing", type=float, default=0.0,
 parser.add_argument("--run-id", type=str, default=None,
     help="Unique run identifier (e.g., random hash) to prevent conflicts across machines")
 
+# Architecture selection
+parser.add_argument("--architecture", type=str, default="new", 
+    choices=["old", "variant", "new"],
+    help="FC architecture: old (1024->512->3), variant (1024->256->3), new (1024->256->128->3)")
+
 
 class ImageShape(NamedTuple):
     height: int
@@ -177,7 +182,7 @@ def main(args):
         pin_memory=True,
     )
 
-    model = Siamese(in_channels=3, dropout=args.dropout) #was CNN
+    model = Siamese(in_channels=3, dropout=args.dropout, architecture=args.architecture) #was CNN
 
     ## TASK 8: Redefine the criterion to be softmax cross entropy
     # Use label smoothing if specified
@@ -202,7 +207,12 @@ def main(args):
 
     log_dir = get_summary_writer_log_dir(args)
     print(f"Writing logs to {log_dir}")
-    print(f"Training with: optimizer={args.optimizer}, lr={args.learning_rate}, batch_size={args.batch_size}, weight_decay={args.weight_decay}, dropout={args.dropout}, label_smoothing={args.label_smoothing}, scheduler={args.scheduler}")
+    arch_desc = {
+        'old': '1024->512->3',
+        'variant': '1024->256->3',
+        'new': '1024->256->128->3'
+    }.get(args.architecture, args.architecture)
+    print(f"Training with: architecture={arch_desc}, optimizer={args.optimizer}, lr={args.learning_rate}, batch_size={args.batch_size}, weight_decay={args.weight_decay}, dropout={args.dropout}, label_smoothing={args.label_smoothing}, scheduler={args.scheduler}")
     summary_writer = SummaryWriter(
             str(log_dir),
             flush_secs=5
@@ -236,6 +246,7 @@ def main(args):
             "label_smoothing": args.label_smoothing,
             "epochs": args.epochs,
             "epoch_size": args.epoch_size,
+            "architecture": args.architecture,
         },
         "augmentation": True,  # Always True now since we hardcoded it
     }
@@ -315,15 +326,28 @@ class Branch(nn.Module):
                 nn.init.kaiming_normal_(layer.weight)
 
 class Siamese(nn.Module):
-    def __init__(self, in_channels=3, dropout=0.5):
+    def __init__(self, in_channels=3, dropout=0.5, architecture="new"):
         super().__init__()
         self.branch = Branch(channels=in_channels) #initialise once so we get shared weights
-        # New FC architecture: 1024 -> 256 -> 128 -> 3
-        self.fc1 = nn.Linear(1024, 256)
-        self.fc2 = nn.Linear(256, 128)
-        self.fc3 = nn.Linear(128, 3)
+        self.architecture = architecture
         self.ReLU = nn.ReLU(inplace=True)
         self.dropout = nn.Dropout(p=dropout)
+        
+        if architecture == "old":
+            # Old: 1024 -> 512 -> 3
+            self.fc1 = nn.Linear(1024, 512)
+            self.fc2 = nn.Linear(512, 3)
+        elif architecture == "variant":
+            # Variant: 1024 -> 256 -> 3
+            self.fc1 = nn.Linear(1024, 256)
+            self.fc2 = nn.Linear(256, 3)
+        elif architecture == "new":
+            # New: 1024 -> 256 -> 128 -> 3
+            self.fc1 = nn.Linear(1024, 256)
+            self.fc2 = nn.Linear(256, 128)
+            self.fc3 = nn.Linear(128, 3)
+        else:
+            raise ValueError(f"Unknown architecture: {architecture}")
 
     def forward(self, anchor, comparator):
         b1 = self.branch(anchor)
@@ -334,10 +358,15 @@ class Siamese(nn.Module):
         x = self.fc1(x)
         x = self.ReLU(x)
         x = self.dropout(x)
-        x = self.fc2(x)
-        x = self.ReLU(x)
-        x = self.dropout(x)
-        x = self.fc3(x)
+        
+        if self.architecture == "new":
+            x = self.fc2(x)
+            x = self.ReLU(x)
+            x = self.dropout(x)
+            x = self.fc3(x)
+        else:
+            x = self.fc2(x)
+        
         return x
 
 
@@ -576,7 +605,9 @@ def get_summary_writer_log_dir(args: argparse.Namespace) -> str:
     # Add _aug suffix to distinguish augmented runs
     # Include label smoothing in name if used
     smoothing_part = f"_{ls_str}" if ls_str else ""
-    tb_log_dir_prefix = f'opt={args.optimizer}_sched={args.scheduler}_bs={args.batch_size}_lr={lr_str}_wd={wd_str}{smoothing_part}_aug{run_id_suffix}_run_'
+    # Include architecture in name (only if not default "new")
+    arch_part = f"_arch={args.architecture}" if args.architecture != "new" else ""
+    tb_log_dir_prefix = f'opt={args.optimizer}_sched={args.scheduler}_bs={args.batch_size}_lr={lr_str}_wd={wd_str}{smoothing_part}{arch_part}_aug{run_id_suffix}_run_'
     i = 0
     while i < 1000:
         tb_log_dir = args.log_dir / (tb_log_dir_prefix + str(i))
