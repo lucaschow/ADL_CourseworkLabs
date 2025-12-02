@@ -170,12 +170,37 @@ def analyze_category2_predictions(model, test_loader, device, num_examples=10):
     return correct_category2, incorrect_category2
 
 def visualize_category2_pairs(pairs, title, num_examples=10):
-    """Visualize category 2 pairs side by side"""
+    """Visualize category 2 pairs side by side - generates two versions: with labels and clean"""
     n_pairs = min(num_examples, len(pairs))
     if n_pairs == 0:
         print(f"No pairs to visualize for {title}")
         return
     
+    base_filename = f"category2_{title.lower().replace(' ', '_').replace('(', '').replace(')', '')}"
+    
+    # Save metadata to text file for reference
+    metadata_file = f"{base_filename}_metadata.txt"
+    with open(metadata_file, 'w') as f:
+        f.write(f"{title}\n")
+        f.write("="*80 + "\n\n")
+        for pair_idx, pair_info in enumerate(pairs[:n_pairs]):
+            img_a_path = pair_info['img_a_path']
+            img_b_path = pair_info['img_b_path']
+            true_label = pair_info['true_label']
+            pred_label = pair_info['pred_label']
+            index = pair_info['index']
+            
+            f.write(f"Pair {pair_idx + 1}:\n")
+            f.write(f"  Index: {index}\n")
+            f.write(f"  Image A: {Path(img_a_path).name}\n")
+            f.write(f"  Image B: {Path(img_b_path).name}\n")
+            f.write(f"  True Label: {LABEL_NAMES[true_label]} ({true_label})\n")
+            f.write(f"  Predicted Label: {LABEL_NAMES[pred_label]} ({pred_label})\n")
+            f.write(f"  Status: {'CORRECT' if pred_label == true_label else 'WRONG'}\n")
+            f.write("\n")
+    print(f"Saved metadata to: {metadata_file}")
+    
+    # Version 1: WITH labels (for reference)
     fig, axes = plt.subplots(n_pairs, 2, figsize=(10, 5*n_pairs))
     if n_pairs == 1:
         axes = axes.reshape(1, -1)
@@ -217,9 +242,36 @@ def visualize_category2_pairs(pairs, title, num_examples=10):
                 bbox=dict(boxstyle='round', facecolor=color, alpha=0.7))
     
     plt.tight_layout()
-    output_file = f"category2_{title.lower().replace(' ', '_')}.png"
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
-    print(f"Saved visualization to: {output_file}")
+    output_file_with_labels = f"{base_filename}_with_labels.png"
+    plt.savefig(output_file_with_labels, dpi=150, bbox_inches='tight')
+    print(f"Saved visualization with labels to: {output_file_with_labels}")
+    plt.close()
+    
+    # Version 2: CLEAN (no labels, for paper)
+    fig, axes = plt.subplots(n_pairs, 2, figsize=(10, 5*n_pairs))
+    if n_pairs == 1:
+        axes = axes.reshape(1, -1)
+    
+    # No title, no labels, just images
+    for pair_idx, pair_info in enumerate(pairs[:n_pairs]):
+        img_a_path = pair_info['img_a_path']
+        img_b_path = pair_info['img_b_path']
+        
+        # Load original images
+        img_a = np.array(Image.open(img_a_path).convert('RGB'))
+        img_b = np.array(Image.open(img_b_path).convert('RGB'))
+        
+        # Plot images - no titles, no text, just clean images
+        axes[pair_idx, 0].imshow(img_a)
+        axes[pair_idx, 0].axis('off')
+        
+        axes[pair_idx, 1].imshow(img_b)
+        axes[pair_idx, 1].axis('off')
+    
+    plt.tight_layout()
+    output_file_clean = f"{base_filename}_clean.png"
+    plt.savefig(output_file_clean, dpi=150, bbox_inches='tight')
+    print(f"Saved clean visualization to: {output_file_clean}")
     plt.close()
 
 def main():
