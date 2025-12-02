@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Test a single model on the test set (NEW FC architecture: 1024->256->128->3).
+Test a single model on the test set.
+Automatically detects architecture (old/variant/new) and uses the correct model class.
 Usage: python test_single_model.py path/to/model.pth [--dropout 0.5]
 """
 import torch
@@ -10,11 +11,117 @@ from pathlib import Path
 from torch.utils.data import DataLoader
 from torchvision import transforms
 import sys
+from torch import nn
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 from dataloader import ProgressionDataset
-from train_siamese import Siamese, compute_accuracy, DEVICE
+from train_siamese import Branch, compute_accuracy, DEVICE
+
+# Define all three architectures
+class SiameseOld(nn.Module):
+    """Old architecture: 1024 -> 512 -> 3"""
+    def __init__(self, in_channels=3, dropout=0.5):
+        super().__init__()
+        self.branch = Branch(channels=in_channels)
+        self.fc1 = nn.Linear(1024, 512)
+        self.fc2 = nn.Linear(512, 3)
+        self.ReLU = nn.ReLU(inplace=True)
+        self.dropout = nn.Dropout(p=dropout)
+
+    def forward(self, anchor, comparator):
+        b1 = self.branch(anchor)
+        b2 = self.branch(comparator)
+        b1 = b1.view(b1.size(0), -1)
+        b2 = b2.view(b2.size(0), -1) 
+        x = torch.cat((b1, b2), dim=1)
+        x = self.fc1(x)
+        x = self.ReLU(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
+
+class SiameseVariant(nn.Module):
+    """Variant architecture: 1024 -> 256 -> 3"""
+    def __init__(self, in_channels=3, dropout=0.5):
+        super().__init__()
+        self.branch = Branch(channels=in_channels)
+        self.fc1 = nn.Linear(1024, 256)
+        self.fc2 = nn.Linear(256, 3)
+        self.ReLU = nn.ReLU(inplace=True)
+        self.dropout = nn.Dropout(p=dropout)
+
+    def forward(self, anchor, comparator):
+        b1 = self.branch(anchor)
+        b2 = self.branch(comparator)
+        b1 = b1.view(b1.size(0), -1)
+        b2 = b2.view(b2.size(0), -1) 
+        x = torch.cat((b1, b2), dim=1)
+        x = self.fc1(x)
+        x = self.ReLU(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
+
+class SiameseNew(nn.Module):
+    """New architecture: 1024 -> 256 -> 128 -> 3"""
+    def __init__(self, in_channels=3, dropout=0.5):
+        super().__init__()
+        self.branch = Branch(channels=in_channels)
+        self.fc1 = nn.Linear(1024, 256)
+        self.fc2 = nn.Linear(256, 128)
+        self.fc3 = nn.Linear(128, 3)
+        self.ReLU = nn.ReLU(inplace=True)
+        self.dropout = nn.Dropout(p=dropout)
+
+    def forward(self, anchor, comparator):
+        b1 = self.branch(anchor)
+        b2 = self.branch(comparator)
+        b1 = b1.view(b1.size(0), -1)
+        b2 = b2.view(b2.size(0), -1) 
+        x = torch.cat((b1, b2), dim=1)
+        x = self.fc1(x)
+        x = self.ReLU(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
+        x = self.ReLU(x)
+        x = self.dropout(x)
+        x = self.fc3(x)
+        return x
+
+def detect_architecture(state_dict):
+    """
+    Detect architecture from state_dict keys.
+    Returns: 'old', 'variant', or 'new'
+    """
+    keys = list(state_dict.keys())
+    
+    # Check if fc3 exists -> new architecture
+    if 'fc3.weight' in keys:
+        return 'new'  # 1024 -> 256 -> 128 -> 3
+    
+    # Check fc2 weight shape to distinguish old vs variant
+    if 'fc2.weight' in keys:
+        fc2_shape = state_dict['fc2.weight'].shape
+        if fc2_shape[0] == 3:  # Output is 3 classes
+            if fc2_shape[1] == 256:
+                return 'variant'  # 1024 -> 256 -> 3
+            elif fc2_shape[1] == 512:
+                return 'old'  # 1024 -> 512 -> 3
+    
+    # Default to old if we can't determine
+    return 'old'
+
+def get_model_class(architecture):
+    """Get the appropriate model class for the architecture"""
+    if architecture == 'old':
+        return SiameseOld
+    elif architecture == 'variant':
+        return SiameseVariant
+    elif architecture == 'new':
+        return SiameseNew
+    else:
+        raise ValueError(f"Unknown architecture: {architecture}")
 
 def main():
     parser = argparse.ArgumentParser(description="Test a single model on the test set")
@@ -56,15 +163,27 @@ def main():
     
     print(f"Test set size: {len(test_dataset)} samples")
     
-    # Create and load model
+    # Load state dict to detect architecture
     print(f"\nLoading model...")
-    model = Siamese(in_channels=3, dropout=args.dropout)
     state_dict = torch.load(model_path, weights_only=True, map_location=DEVICE)
+    architecture = detect_architecture(state_dict)
+    
+    # Get appropriate model class
+    ModelClass = get_model_class(architecture)
+    model = ModelClass(in_channels=3, dropout=args.dropout)
     model.load_state_dict(state_dict, strict=True)
     model = model.to(DEVICE)
     model.eval()
     
-    print("Evaluating on test set...")
+    # Display architecture info
+    arch_desc = {
+        'old': '1024->512->3',
+        'variant': '1024->256->3',
+        'new': '1024->256->128->3'
+    }.get(architecture, architecture)
+    print(f"Detected architecture: {arch_desc}")
+    
+    print("\nEvaluating on test set...")
     results = {"preds": [], "labels": []}
     total_loss = 0
     criterion = torch.nn.CrossEntropyLoss()
@@ -89,6 +208,7 @@ def main():
     print("\n" + "="*80)
     print("RESULTS:")
     print("="*80)
+    print(f"Architecture: {arch_desc}")
     print(f"Test Accuracy: {accuracy * 100:.2f}%")
     print(f"Test Loss: {average_loss:.5f}")
     print("="*80)
