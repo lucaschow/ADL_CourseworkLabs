@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Test a single model on the test set (NEW FC architecture: 1024->256->128->3).
-Usage: python test_single_model.py path/to/model.pth [--dropout 0.5]
+Test a single model on the test set (OLD FC architecture: 1024->512->3).
+Usage: python test_single_model_old.py path/to/model.pth [--dropout 0.5]
 """
 import torch
 import numpy as np
@@ -14,7 +14,7 @@ import sys
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 from dataloader import ProgressionDataset
-from train_siamese import Siamese, compute_accuracy, DEVICE
+from train_siamese_old import Siamese, compute_accuracy, DEVICE
 
 def main():
     parser = argparse.ArgumentParser(description="Test a single model on the test set")

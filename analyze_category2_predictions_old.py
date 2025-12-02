@@ -4,8 +4,8 @@ Analyze category 2 (different recipe) predictions: show correct vs incorrect pai
 This helps test the hypothesis that the model learned to distinguish recipes by kitchen,
 and only gets category 2 right when time of day differs.
 
-NEW FC architecture: 1024->256->128->3
-Usage: python analyze_category2_predictions.py path/to/model.pth [--dropout 0.5] [--num-examples 10]
+OLD FC architecture: 1024->512->3
+Usage: python analyze_category2_predictions_old.py path/to/model.pth [--dropout 0.5] [--num-examples 10]
 """
 import torch
 import argparse
@@ -84,10 +84,8 @@ class Siamese(nn.Module):
     def __init__(self, in_channels=3, dropout=0.5):
         super().__init__()
         self.branch = Branch(channels=in_channels)
-        # New FC architecture: 1024 -> 256 -> 128 -> 3
-        self.fc1 = nn.Linear(1024, 256)
-        self.fc2 = nn.Linear(256, 128)
-        self.fc3 = nn.Linear(128, 3)
+        self.fc1 = nn.Linear(1024, 512)
+        self.fc2 = nn.Linear(512, 3)
         self.ReLU = nn.ReLU(inplace=True)
         self.dropout = nn.Dropout(p=dropout)
 
@@ -101,9 +99,6 @@ class Siamese(nn.Module):
         x = self.ReLU(x)
         x = self.dropout(x)
         x = self.fc2(x)
-        x = self.ReLU(x)
-        x = self.dropout(x)
-        x = self.fc3(x)
         return x
 
 if torch.cuda.is_available():
