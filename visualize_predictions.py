@@ -112,50 +112,6 @@ LABEL_NAMES = {
     2: "Unrelated (different recipe)"
 }
 
-class GradCAM:
-    """Grad-CAM for generating fixation maps"""
-    def __init__(self, model, target_layer):
-        self.model = model
-        self.target_layer = target_layer
-        self.gradients = None
-        self.activations = None
-        
-        # Register hooks
-        target_layer.register_forward_hook(self.save_activation)
-        target_layer.register_backward_hook(self.save_gradient)
-    
-    def save_activation(self, module, input, output):
-        self.activations = output
-    
-    def save_gradient(self, module, grad_input, grad_output):
-        self.gradients = grad_output[0]
-    
-    def generate(self, input_img, class_idx=None):
-        """Generate Grad-CAM heatmap"""
-        self.model.eval()
-        
-        # Forward pass
-        output = self.model.branch(input_img)
-        
-        if class_idx is None:
-            # Use the class with highest score
-            # But we need the full model output, so we'll need to handle this differently
-            # For now, we'll use the feature map directly
-            pass
-        
-        # Backward pass
-        if self.gradients is not None:
-            # Compute weights
-            weights = torch.mean(self.gradients, dim=(2, 3), keepdim=True)
-            # Generate CAM
-            cam = torch.sum(weights * self.activations, dim=1, keepdim=True)
-            cam = F.relu(cam)
-            # Normalize
-            cam = cam.squeeze().cpu().numpy()
-            cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
-            return cam
-        return None
-
 def generate_gradcam_for_pair(model, img_a, img_b, device):
     """Generate Grad-CAM maps for both images in a pair using feature activations"""
     model.eval()
@@ -163,33 +119,25 @@ def generate_gradcam_for_pair(model, img_a, img_b, device):
     img_a = img_a.unsqueeze(0).to(device)
     img_b = img_b.unsqueeze(0).to(device)
     
-    # Store activations from the last conv layer (before AdaptiveAvgPool)
-    activations_a = []
-    activations_b = []
-    gradients_a = []
-    gradients_b = []
+    # Store activations and gradients in order (single set of hooks)
+    activations = []
+    gradients = []
     
-    def forward_hook_a(module, input, output):
-        activations_a.append(output)
+    def forward_hook(module, input, output):
+        activations.append(output)
     
-    def forward_hook_b(module, input, output):
-        activations_b.append(output)
+    def backward_hook(module, grad_input, grad_output):
+        gradients.append(grad_output[0])
     
-    def backward_hook_a(module, grad_input, grad_output):
-        gradients_a.append(grad_output[0])
-    
-    def backward_hook_b(module, grad_input, grad_output):
-        gradients_b.append(grad_output[0])
-    
-    # Register hooks on the last conv layer (chunk4's last conv, before AdaptiveAvgPool)
+    # Register single set of hooks on the last conv layer (chunk4's last conv, before AdaptiveAvgPool)
     # This is the Conv2d at index 3 in chunk4
-    hook_a = model.branch.chunk4[3].register_forward_hook(forward_hook_a)
-    hook_b = model.branch.chunk4[3].register_forward_hook(forward_hook_b)
-    hook_grad_a = model.branch.chunk4[3].register_full_backward_hook(backward_hook_a)
-    hook_grad_b = model.branch.chunk4[3].register_full_backward_hook(backward_hook_b)
+    hook_fwd = model.branch.chunk4[3].register_forward_hook(forward_hook)
+    hook_bwd = model.branch.chunk4[3].register_full_backward_hook(backward_hook)
     
     # Forward pass
+    # First forward: img_a -> activations[0] = features for img_a
     b1 = model.branch(img_a)
+    # Second forward: img_b -> activations[1] = features for img_b
     b2 = model.branch(img_b)
     b1_flat = b1.view(b1.size(0), -1)
     b2_flat = b2.view(b2.size(0), -1)
@@ -206,34 +154,35 @@ def generate_gradcam_for_pair(model, img_a, img_b, device):
     model.zero_grad()
     output[0, pred].backward()
     
-    # Generate CAM
-    if len(activations_a) > 0 and len(gradients_a) > 0:
-        # For image A: compute weighted sum of feature maps
-        weights_a = torch.mean(gradients_a[0], dim=(2, 3), keepdim=True)
-        cam_a = torch.sum(weights_a * activations_a[0], dim=1, keepdim=True)
-        cam_a = F.relu(cam_a)
-        cam_a = cam_a.squeeze().detach().cpu().numpy()
-        cam_a = (cam_a - cam_a.min()) / (cam_a.max() - cam_a.min() + 1e-8)
-    else:
-        # Fallback: use simple gradient magnitude
-        cam_a = np.ones((14, 14)) * 0.5  # Default heatmap
+    # Helper function to generate CAM from activation and gradient
+    def make_cam(act, grad):
+        weights = torch.mean(grad, dim=(2, 3), keepdim=True)
+        cam = torch.sum(weights * act, dim=1, keepdim=True)
+        cam = F.relu(cam)
+        cam = cam.squeeze().detach().cpu().numpy()
+        cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
+        return cam
     
-    if len(activations_b) > 0 and len(gradients_b) > 0:
-        # For image B
-        weights_b = torch.mean(gradients_b[0], dim=(2, 3), keepdim=True)
-        cam_b = torch.sum(weights_b * activations_b[0], dim=1, keepdim=True)
-        cam_b = F.relu(cam_b)
-        cam_b = cam_b.squeeze().detach().cpu().numpy()
-        cam_b = (cam_b - cam_b.min()) / (cam_b.max() - cam_b.min() + 1e-8)
+    # Generate CAMs
+    # Note: During backward pass, gradients are typically appended in reverse order (LIFO)
+    # So gradients[0] corresponds to the last forward pass (img_b) and gradients[1] to the first (img_a)
+    if len(activations) >= 2 and len(gradients) >= 2:
+        # activations[0] = img_a features, gradients[1] = img_a gradients (first forward, last backward)
+        cam_a = make_cam(activations[0], gradients[1])
+        # activations[1] = img_b features, gradients[0] = img_b gradients (second forward, first backward)
+        cam_b = make_cam(activations[1], gradients[0])
+    elif len(activations) >= 2 and len(gradients) >= 1:
+        # Fallback: if only one gradient, use it for both (shouldn't happen, but safe)
+        cam_a = make_cam(activations[0], gradients[0])
+        cam_b = make_cam(activations[1], gradients[0])
     else:
-        # Fallback
+        # Fallback: use default heatmap
+        cam_a = np.ones((14, 14)) * 0.5
         cam_b = np.ones((14, 14)) * 0.5
     
     # Remove hooks
-    hook_a.remove()
-    hook_b.remove()
-    hook_grad_a.remove()
-    hook_grad_b.remove()
+    hook_fwd.remove()
+    hook_bwd.remove()
     
     return cam_a, cam_b, pred
 

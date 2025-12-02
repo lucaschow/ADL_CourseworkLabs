@@ -355,7 +355,8 @@ class Trainer:
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.test_loader = test_loader
-        self.criterion = criterion
+        self.criterion = criterion  # Training criterion (may have label smoothing)
+        self.eval_criterion = nn.CrossEntropyLoss()  # Evaluation criterion (no smoothing for fair comparison)
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.summary_writer = summary_writer
@@ -393,8 +394,10 @@ class Trainer:
                 step_time = time.time() - data_load_end_time
                 if ((self.step + 1) % log_frequency) == 0:
                     val_loss, val_accuracy = self.validate()
+                    # Use unsmoothed loss for training loss logging too, for fair comparison
+                    train_eval_loss = self.eval_criterion(logits, labels).item()
                     self.summary_writer.add_scalars("accuracy", {"train":accuracy, "val": val_accuracy}, self.step)
-                    self.summary_writer.add_scalars("loss", {"train":loss.item(), "val": val_loss}, self.step)
+                    self.summary_writer.add_scalars("loss", {"train":train_eval_loss, "val": val_loss}, self.step)
                     self.model.train()
 
                 if ((self.step + 1) % print_frequency) == 0:
@@ -499,7 +502,7 @@ class Trainer:
                 img_b = img_b.to(self.device)
                 labels = labels.to(self.device)
                 logits = self.model(img_a,img_b)
-                loss = self.criterion(logits, labels)
+                loss = self.eval_criterion(logits, labels)  # Use unsmoothed loss for fair comparison
                 total_loss += loss.item()
                 preds = logits.argmax(dim=-1).cpu().numpy()
                 results["preds"].extend(list(preds))
@@ -521,7 +524,7 @@ class Trainer:
                 img_b = img_b.to(self.device)
                 labels = labels.to(self.device)
                 logits = self.model(img_a, img_b)
-                loss = self.criterion(logits, labels)
+                loss = self.eval_criterion(logits, labels)  # Use unsmoothed loss for fair comparison
                 total_loss += loss.item()
                 preds = logits.argmax(dim=-1).cpu().numpy()
                 results["preds"].extend(list(preds))
