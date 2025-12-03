@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""
-Test a single model on the test set.
-Automatically detects architecture (old/variant/new) and uses the correct model class.
-Usage: python test_single_model.py path/to/model.pth [--dropout 0.5]
-"""
 import torch
 import numpy as np
 import argparse
@@ -18,9 +13,8 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from dataloader import ProgressionDataset
 from train_siamese import Branch, compute_accuracy, DEVICE
 
-# Define all three architectures
+# Note we didnt implement the following for switching architectures so ignore code below
 class SiameseOld(nn.Module):
-    """Old architecture: 1024 -> 512 -> 3"""
     def __init__(self, in_channels=3, dropout=0.5):
         super().__init__()
         self.branch = Branch(channels=in_channels)
@@ -42,7 +36,6 @@ class SiameseOld(nn.Module):
         return x
 
 class SiameseVariant(nn.Module):
-    """Variant architecture: 1024 -> 256 -> 3"""
     def __init__(self, in_channels=3, dropout=0.5):
         super().__init__()
         self.branch = Branch(channels=in_channels)
@@ -64,7 +57,6 @@ class SiameseVariant(nn.Module):
         return x
 
 class SiameseNew(nn.Module):
-    """New architecture: 1024 -> 256 -> 128 -> 3"""
     def __init__(self, in_channels=3, dropout=0.5):
         super().__init__()
         self.branch = Branch(channels=in_channels)
@@ -90,30 +82,22 @@ class SiameseNew(nn.Module):
         return x
 
 def detect_architecture(state_dict):
-    """
-    Detect architecture from state_dict keys.
-    Returns: 'old', 'variant', or 'new'
-    """
     keys = list(state_dict.keys())
-    
-    # Check if fc3 exists -> new architecture
     if 'fc3.weight' in keys:
-        return 'new'  # 1024 -> 256 -> 128 -> 3
+        return 'new' 
     
-    # Check fc2 weight shape to distinguish old vs variant
+    
     if 'fc2.weight' in keys:
         fc2_shape = state_dict['fc2.weight'].shape
-        if fc2_shape[0] == 3:  # Output is 3 classes
+        if fc2_shape[0] == 3:  
             if fc2_shape[1] == 256:
-                return 'variant'  # 1024 -> 256 -> 3
+                return 'variant' 
             elif fc2_shape[1] == 512:
-                return 'old'  # 1024 -> 512 -> 3
+                return 'old'  
     
-    # Default to old if we can't determine
     return 'old'
 
 def get_model_class(architecture):
-    """Get the appropriate model class for the architecture"""
     if architecture == 'old':
         return SiameseOld
     elif architecture == 'variant':
@@ -139,8 +123,7 @@ def main():
     print(f"Device: {DEVICE}")
     print(f"Dropout: {args.dropout}")
     print("="*80)
-    
-    # Setup test dataset - MUST match training code exactly
+
     eval_transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor()
@@ -162,20 +145,16 @@ def main():
     )
     
     print(f"Test set size: {len(test_dataset)} samples")
-    
-    # Load state dict to detect architecture
     print(f"\nLoading model...")
     state_dict = torch.load(model_path, weights_only=True, map_location=DEVICE)
     architecture = detect_architecture(state_dict)
-    
-    # Get appropriate model class
     ModelClass = get_model_class(architecture)
     model = ModelClass(in_channels=3, dropout=args.dropout)
     model.load_state_dict(state_dict, strict=True)
     model = model.to(DEVICE)
     model.eval()
     
-    # Display architecture info
+    # not needed
     arch_desc = {
         'old': '1024->512->3',
         'variant': '1024->256->3',
@@ -210,14 +189,10 @@ def main():
         np.array(results["labels"]), np.array(results["preds"])
     )
     average_loss = total_loss / len(test_loader)
-    
-    print("\n" + "="*80)
-    print("RESULTS:")
-    print("="*80)
-    print(f"Architecture: {arch_desc}")
+    print("Running model on test...:")
+    print(f"Architecture: {arch_desc}") 
     print(f"Test Accuracy: {accuracy * 100:.2f}%")
     print(f"Test Loss: {average_loss:.5f}")
-    print("="*80)
 
 if __name__ == "__main__":
     main()

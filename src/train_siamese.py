@@ -60,7 +60,7 @@ parser.add_argument(
     "--epoch-size",
     default=5000,
     type=int,
-    help="Number of training pairs per epoch (default: 5000)",
+    help="Number of training pairs per epoch",
 )
 parser.add_argument(
     "--val-frequency",
@@ -78,14 +78,14 @@ parser.add_argument(
     "--print-frequency",
     default=10,
     type=int,
-    help="How frequently to print progress to the command line in number of steps",
+    help="How frequently to print progress to the command line",
 )
 parser.add_argument(
     "-j",
     "--worker-count",
-    default=0, #ONLY FOR MAC FIX - cpu_count() is not supported on Mac
+    default=0, 
     type=int,
-    help="Number of worker processes used to load data.",
+    help="Number of worker.",
 )
 parser.add_argument(
     "--weight-decay", type=float, default=0.0,
@@ -94,32 +94,28 @@ parser.add_argument(
 parser.add_argument("--beta1", type=float, default=0.9,help="Adam Beta1.")
 parser.add_argument("--beta2", type=float, default=0.999,help="Adam Beta2.")
 
-# Optimizer selection
 parser.add_argument("--optimizer", type=str, default="adam", choices=["adam", "adamw"],
     help="Optimizer type: adam or adamw")
 
-# Scheduler selection
+#Note - dont use
 parser.add_argument("--scheduler", type=str, default="none", 
     choices=["none", "cosine", "reduce_on_plateau"],
     help="Learning rate scheduler type")
 
-# Cosine annealing parameters
 parser.add_argument("--T-max", type=int, default=None,
     help="T_max for CosineAnnealingLR (default: epochs, only used if scheduler=cosine)")
 
-# Dropout
 parser.add_argument("--dropout", type=float, default=0.5,
     help="Dropout probability (0.0 to 1.0)")
 
-# Label smoothing
 parser.add_argument("--label-smoothing", type=float, default=0.0,
     help="Label smoothing factor (0.0 = no smoothing, 0.1 = common value)")
 
-# Run ID for multi-machine runs
+
 parser.add_argument("--run-id", type=str, default=None,
     help="Unique run identifier (e.g., random hash) to prevent conflicts across machines")
 
-# Architecture selection
+#Note: dont use
 parser.add_argument("--architecture", type=str, default="new", 
     choices=["old", "variant", "new"],
     help="FC architecture: old (1024->512->3), variant (1024->256->3), new (1024->256->128->3)")
@@ -138,14 +134,12 @@ else:
 
 
 def main(args):
-    # Training transforms: with augmentation
     train_tf = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.RandomRotation(5),
         transforms.RandomHorizontalFlip(0.5),
         transforms.ToTensor()
     ])
-    # Val/Test transforms: no augmentation
     eval_tf = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor()
@@ -157,7 +151,6 @@ def main(args):
 
     
     train_dataset = ProgressionDataset(root_dir='dataset/train', transform=train_tf, mode='train', recipe_ids_list=recepie_ids_list, epoch_size=epoch_size)
-    #you didnt load in the data correctly you melon - we only have train
     test_dataset = ProgressionDataset(root_dir='dataset/test', transform=eval_tf, mode='test', label_file='dataset/test_labels.txt')
     val_dataset = ProgressionDataset(root_dir='dataset/val', transform=eval_tf, mode='val', label_file='dataset/val_labels.txt')
     train_loader = torch.utils.data.DataLoader(
@@ -183,9 +176,6 @@ def main(args):
     )
 
     model = Siamese(in_channels=3, dropout=args.dropout, architecture=args.architecture) #was CNN
-
-    ## TASK 8: Redefine the criterion to be softmax cross entropy
-    # Use label smoothing if specified
     criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
 
     # Create optimizer
@@ -231,7 +221,7 @@ def main(args):
     print(f"Final test accuracy: {test_accuracy * 100:.2f}%")
     print(f"Final test loss: {test_loss:.5f}")
     
-    # Save test results to JSON file in log directory
+    # Save test results 
     results_json = {
         "test_accuracy": float(test_accuracy),
         "test_accuracy_percent": float(test_accuracy * 100),
@@ -334,15 +324,12 @@ class Siamese(nn.Module):
         self.dropout = nn.Dropout(p=dropout)
         
         if architecture == "old":
-            # Old: 1024 -> 512 -> 3
             self.fc1 = nn.Linear(1024, 512)
             self.fc2 = nn.Linear(512, 3)
         elif architecture == "variant":
-            # Variant: 1024 -> 256 -> 3
             self.fc1 = nn.Linear(1024, 256)
             self.fc2 = nn.Linear(256, 3)
         elif architecture == "new":
-            # New: 1024 -> 256 -> 128 -> 3
             self.fc1 = nn.Linear(1024, 256)
             self.fc2 = nn.Linear(256, 128)
             self.fc3 = nn.Linear(128, 3)
@@ -455,16 +442,14 @@ class Trainer:
                             print(f"Free up disk space and resume training.")
                             raise  # Stop training - can't continue without saving
                         else:
-                            raise  # Re-raise other OSErrors
+                            raise  
                
-                # Step scheduler based on validation metric (for ReduceLROnPlateau)
                 if self.scheduler is not None and isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
                     self.scheduler.step(val_accuracy)
                 
                 # self.validate() will put the model in validation mode,
                 # so we have to switch back to train mode afterwards
                 self.model.train()
-            # Step scheduler after each epoch (for cosine annealing)
             if self.scheduler is not None and not isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
                 self.scheduler.step()
             
@@ -474,7 +459,7 @@ class Trainer:
                     try:
                         self.model.load_state_dict(torch.load(best_model_path, weights_only=True, map_location=self.device))
                     except (RuntimeError, EOFError) as e:
-                        print(f"Warning: Could not load best_model.pth (may be corrupted): {e}")
+                        print(f"Could not load best_model.pth{e}")
                         print("Continuing with current model state...")
                 
                 test_loss, test_accuracy = self.test(self.test_loader)
@@ -489,7 +474,7 @@ class Trainer:
             try:
                 self.model.load_state_dict(torch.load(best_model_path, weights_only=True, map_location=self.device))
             except (RuntimeError, EOFError) as e:
-                print(f"Warning: Could not load best_model.pth (may be corrupted): {e}")
+                print(f"Could not load best_model.pth {e}")
                 print("Using final model state instead of best model...")
 
     def print_metrics(self, epoch, accuracy, loss, data_load_time, step_time):
@@ -536,7 +521,7 @@ class Trainer:
                 img_b = img_b.to(self.device)
                 labels = labels.to(self.device)
                 logits = self.model(img_a,img_b)
-                loss = self.eval_criterion(logits, labels)  # Use unsmoothed loss for fair comparison
+                loss = self.eval_criterion(logits, labels)  
                 total_loss += loss.item()
                 preds = logits.argmax(dim=-1).cpu().numpy()
                 results["preds"].extend(list(preds))
@@ -584,28 +569,11 @@ def compute_accuracy(
 
 
 def get_summary_writer_log_dir(args: argparse.Namespace) -> str:
-    """Get a unique directory that hasn't been logged to before for use with a TB
-    SummaryWriter.
-
-    Args:
-        args: CLI Arguments
-
-    Returns:
-        Subdirectory of log_dir with unique subdirectory name to prevent multiple runs
-        from getting logged to the same TB log directory (which you can't easily
-        untangle in TB).
-    """
-    # Format learning rate, weight decay, and label smoothing for cleaner directory names
     lr_str = f"{args.learning_rate:.0e}".replace("e-0", "e-")
     wd_str = f"{args.weight_decay:.0e}".replace("e-0", "e-") if args.weight_decay > 0 else "0"
     ls_str = f"ls={args.label_smoothing}" if args.label_smoothing > 0 else ""
-    
-    # Include run-id if provided (for multi-machine runs)
     run_id_suffix = f"_{args.run_id}" if args.run_id else ""
-    # Add _aug suffix to distinguish augmented runs
-    # Include label smoothing in name if used
     smoothing_part = f"_{ls_str}" if ls_str else ""
-    # Include architecture in name (only if not default "new")
     arch_part = f"_arch={args.architecture}" if args.architecture != "new" else ""
     tb_log_dir_prefix = f'opt={args.optimizer}_sched={args.scheduler}_bs={args.batch_size}_lr={lr_str}_wd={wd_str}{smoothing_part}{arch_part}_aug{run_id_suffix}_run_'
     i = 0

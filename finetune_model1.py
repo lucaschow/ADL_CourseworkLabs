@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""
-Fine-tune an existing model by continuing training with weighted sampling.
-Specifically designed to address category 2 (different recipe) issues by
-training with 80% category 2 examples.
-
-Usage: python finetune_model.py path/to/best_model.pth --epochs 5 --category2-weight 0.8
-"""
 import torch
 import torch.backends.cudnn
 import numpy as np
@@ -30,34 +23,24 @@ from train_siamese import Branch, compute_accuracy, DEVICE, Trainer
 torch.backends.cudnn.benchmark = True
 
 class WeightedProgressionDataset(ProgressionDataset):
-    """
-    Extended ProgressionDataset that allows custom weights for pair types.
-    """
     def __init__(self, root_dir, transform=None, mode='train', 
                  recipe_ids_list=None, epoch_size=None,
                  label_file=None, pair_weights=[0.1, 0.1, 0.8]):
-        """
-        pair_weights: [weight_for_forward, weight_for_reverse, weight_for_unrelated]
-        Default: [0.1, 0.1, 0.8] for 80% category 2 examples
-        """
+       
         super().__init__(root_dir, transform, mode, recipe_ids_list, epoch_size, label_file)
         self.pair_weights = pair_weights
-        print(f"Using pair weights: Forward={pair_weights[0]}, Reverse={pair_weights[1]}, Unrelated={pair_weights[2]}")
+        print(f"Model fine tuned w/ config: Forward={pair_weights[0]}, Reverse={pair_weights[1]}, Unrelated={pair_weights[2]}")
     
     def _generate_pair(self):
-        """
-        Randomly generate a training pair with custom weights.
-        """
-        # Use custom weights instead of default [0.4, 0.4, 0.2]
         pair_type = random.choices([0, 1, 2], weights=self.pair_weights, k=1)[0]
 
-        if pair_type == 2:  # Unrelated pair (from different recipes)
+        if pair_type == 2: 
             recipe_id_a, recipe_id_b = random.sample(self.recipe_ids, 2)
             img_a_path = random.choice(self.recipes[recipe_id_a])
             img_b_path = random.choice(self.recipes[recipe_id_b])
             label = 2
 
-        else:  # Forward or reverse pair (from same recipe)
+        else:  
             recipe_id = random.choice(self.recipe_ids)
             steps = self.recipes[recipe_id]
 
@@ -84,31 +67,25 @@ class WeightedProgressionDataset(ProgressionDataset):
         return img_a_path, img_b_path, label
 
 def detect_architecture(state_dict):
-    """Detect architecture from state_dict keys."""
     keys = list(state_dict.keys())
     
     if 'fc3.weight' in keys:
-        return 'new'  # 1024 -> 256 -> 128 -> 3
+        return 'new'
     
     if 'fc2.weight' in keys:
         fc2_shape = state_dict['fc2.weight'].shape
         if fc2_shape[0] == 3:
             if fc2_shape[1] == 256:
-                return 'variant'  # 1024 -> 256 -> 3
+                return 'variant' 
             elif fc2_shape[1] == 512:
-                return 'old'  # 1024 -> 512 -> 3
+                return 'old'  
     
     return 'old'
 
 def load_model(model_path, device, dropout=0.5):
-    """Load model and detect architecture automatically."""
     from train_siamese import Siamese
-    
-    # Load state dict to detect architecture
     state_dict = torch.load(model_path, weights_only=True, map_location=device)
     architecture = detect_architecture(state_dict)
-    
-    # Create model with detected architecture
     model = Siamese(in_channels=3, dropout=dropout, architecture=architecture)
     model.load_state_dict(state_dict, strict=True)
     model = model.to(device)
@@ -124,13 +101,13 @@ def load_model(model_path, device, dropout=0.5):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Fine-tune an existing model with weighted sampling",
+        description="Fine-tune mode",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("model_path", type=Path, help="Path to the existing model .pth file")
-    parser.add_argument("--epochs", type=int, default=5, help="Number of additional epochs to train")
+    parser.add_argument("--epochs", type=int, default=5, help="No. epochs to train")
     parser.add_argument("--category2-weight", type=float, default=0.8, 
-        help="Weight for category 2 (unrelated) pairs. Remaining weight split equally between forward/reverse. (default: 0.8)")
+        help="Catagory 2 weight")
     parser.add_argument("--learning-rate", type=float, default=1e-4, 
         help="Learning rate for fine-tuning (default: 1e-4)")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
@@ -138,33 +115,29 @@ def main():
     parser.add_argument("--dropout", type=float, default=0.5, help="Dropout value")
     parser.add_argument("--log-dir", type=Path, default=Path("logs"), help="Directory for logs")
     parser.add_argument("--output-dir", type=Path, default=None,
-        help="Directory to save fine-tuned model (default: creates finetune_<original_dir>/)")
+        help="Directory to save fine-tuned model ")
     parser.add_argument("--save-all-epochs", action="store_true", default=True,
-        help="Save model after each epoch (default: True)")
+        help="Save model after each epoch ")
     
     args = parser.parse_args()
     
     if not args.model_path.exists():
-        print(f"ERROR: Model file not found: {args.model_path}")
+        print(f"Error file not found: {args.model_path}")
         return
     
-    # Calculate weights: split remaining weight equally between forward and reverse
     remaining_weight = 1.0 - args.category2_weight
     forward_weight = remaining_weight / 2.0
     reverse_weight = remaining_weight / 2.0
     pair_weights = [forward_weight, reverse_weight, args.category2_weight]
-    
-    print("="*80)
-    print("FINE-TUNING CONFIGURATION")
-    print("="*80)
+ 
+    print("Model Config:")
     print(f"Model: {args.model_path}")
     print(f"Epochs: {args.epochs}")
-    print(f"Pair weights: Forward={pair_weights[0]:.2f}, Reverse={pair_weights[1]:.2f}, Unrelated={pair_weights[2]:.2f}")
+    print(f"Pair weights: Class 0={pair_weights[0]:.2f}, Class 1={pair_weights[1]:.2f}, Class 2={pair_weights[2]:.2f}")
     print(f"Learning rate: {args.learning_rate}")
     print(f"Batch size: {args.batch_size}")
     print(f"Save all epochs: {args.save_all_epochs}")
-    print("="*80)
-    
+
     # Load model
     model, architecture = load_model(args.model_path, DEVICE, args.dropout)
     
@@ -226,16 +199,12 @@ def main():
         num_workers=0,
         pin_memory=True,
     )
-    
-    # Setup optimizer with lower learning rate for fine-tuning
+
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=0.0)
-    
-    # Create log directory
+
     if args.output_dir is None:
-        # Create directory based on original model path and category2-weight
         original_dir = args.model_path.parent.name
-        # Include category2-weight in directory name to avoid overwriting
         cat2_str = f"cat2_{args.category2_weight}".replace(".", "_")
         args.output_dir = args.log_dir / f"finetune_{original_dir}_{cat2_str}"
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -247,25 +216,20 @@ def main():
     
     print(f"\nWriting logs to: {args.output_dir}")
     
-    # Create trainer
     trainer = Trainer(
         model, train_loader, val_loader, test_loader, criterion, optimizer, None, summary_writer, DEVICE
     )
     
-    # Fine-tune for specified epochs with per-epoch test evaluation
+   
     print(f"\nStarting fine-tuning for {args.epochs} epochs...")
     print("="*80)
     
-    # Track best results
-    best_val_accuracy = trainer.best_val_accuracy  # Start with existing best if any
+    best_val_accuracy = trainer.best_val_accuracy  
     best_test_accuracy = 0.0
     epoch_results = []
-    
-    # Manually train one epoch at a time
+
     for epoch in range(args.epochs):
         print(f"\n--- Epoch {epoch + 1}/{args.epochs} ---")
-        
-        # Train for one epoch manually
         trainer.model.train()
         data_load_start_time = time.time()
         for batch_idx, (img_a, img_b, labels) in enumerate(train_loader):
@@ -287,15 +251,12 @@ def main():
             data_load_time = data_load_end_time - data_load_start_time
             step_time = time.time() - data_load_end_time
             
-            # Log periodically
             if ((trainer.step + 1) % 10) == 0:
                 val_loss, val_accuracy = trainer.validate()
                 train_eval_loss = trainer.eval_criterion(logits, labels).item()
                 trainer.summary_writer.add_scalars("accuracy", {"train":accuracy, "val": val_accuracy}, trainer.step)
                 trainer.summary_writer.add_scalars("loss", {"train":train_eval_loss, "val": val_loss}, trainer.step)
                 trainer.model.train()
-
-            # Print periodically
             if ((trainer.step + 1) % 10) == 0:
                 epoch_step = trainer.step % len(train_loader)
                 print(
@@ -309,23 +270,17 @@ def main():
 
             trainer.step += 1
             data_load_start_time = time.time()
-        
-        # End of epoch - evaluate on validation and test
         trainer.summary_writer.add_scalar("epoch", epoch, trainer.step)
-        
         val_loss, val_accuracy = trainer.validate()
         test_loss, test_accuracy = trainer.test(test_loader)
-        
-        # Print results
+ 
         print(f"\nEpoch {epoch + 1} Results:")
         print(f"  Validation - Accuracy: {val_accuracy * 100:.2f}% | Loss: {val_loss:.5f}")
         print(f"  Test       - Accuracy: {test_accuracy * 100:.2f}% | Loss: {test_loss:.5f}")
-        
-        # Log to tensorboard
+  
         trainer.summary_writer.add_scalar("test_accuracy", test_accuracy, epoch)
         trainer.summary_writer.add_scalar("test_loss", test_loss, epoch)
-        
-        # Save model for this epoch
+     
         if args.save_all_epochs:
             epoch_model_path = args.output_dir / f"epoch_{epoch + 1}.pth"
             try:
@@ -338,7 +293,6 @@ def main():
                 else:
                     raise
         
-        # Update best results and save best model
         if val_accuracy > best_val_accuracy:
             best_val_accuracy = val_accuracy
             best_test_accuracy = test_accuracy
@@ -353,7 +307,6 @@ def main():
                 else:
                     raise
         
-        # Store epoch results
         epoch_results.append({
             'epoch': epoch + 1,
             'val_accuracy': float(val_accuracy),
@@ -362,17 +315,13 @@ def main():
             'test_loss': float(test_loss),
         })
         
-        # Reset model to train mode for next epoch
-        trainer.model.train()
     
-    print("\n" + "="*80)
-    print("FINE-TUNING COMPLETE")
-    print("="*80)
+        trainer.model.train()
+
+    print("Fine tuning results...")
     print(f"Best Validation Accuracy: {best_val_accuracy * 100:.2f}%")
     print(f"Best Test Accuracy: {best_test_accuracy * 100:.2f}%")
-    print("="*80)
-    
-    # Save test results
+
     results_json = {
         "best_val_accuracy": float(best_val_accuracy),
         "best_val_accuracy_percent": float(best_val_accuracy * 100),
